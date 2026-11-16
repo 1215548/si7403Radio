@@ -254,6 +254,12 @@ LED 慢闪、串口打印原因和寄存器值，按键/屏幕照常工作，串
   明柱子能动起来），帧率提到 20fps（50ms），柱高直接跟随正弦
   （上下都平滑），最高 9px 留 3px 顶空；全屏重发是突发写（约
   1ms），20fps 下顶部重写更快、更不易察觉。
+- **频谱柱子已删（2026-11-16，v0.3.9）。**
+  用户决定让另一位 AI 处理频谱问题。删掉 drawBottomArea /
+  tickSpectrum / kSpecBars / _specLevel / _specPeak / _lastSpecMs /
+  _specTick，首页播放时底部（y=52..63）留空，其余布局不变
+  （顶行状态+时间、分隔线、大频率、中行消息/台名）。clearRegion
+  是通用画布原语，保留供后续使用。
   但频率/RSSI 等所有文字都不见，只剩分隔线和信号条。根因在
   Waveshare 的 `GUI_Paint.cpp`：`Paint_DrawString_EN` 调
   `Paint_DrawChar` 时把前景/背景色传反了，字形被画成黑色，

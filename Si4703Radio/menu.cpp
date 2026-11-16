@@ -116,7 +116,6 @@ void MenuUi::tick() {
   }
   pollRadio();
   pollWifi();
-  tickSpectrum();  // 首页播放时底部频谱律动(局部刷新)
   // 瞬时消息过期后清掉并重画中行(恢复显示台名),避免消息残留
   if (_msg[0] && millis() >= _msgUntil) {
     _msg[0] = '\0';
@@ -549,54 +548,9 @@ void MenuUi::drawHomePlaying() {
     const RdsInfo& r = _radio->rds();
     _oled->textEN(2, 42, r.psComplete ? r.ps : "FM", &Font8);
   }
-  // 底部:频谱律动(一直显示,不被消息打断)
-  drawBottomArea();
+  // 底部(y=52..63)留空:频谱柱子已删(2026-11-16 v0.3.9),
+  //  另一位 AI 接手频谱问题,此处预留给它。
   _oled->flush();
-}
-
-// ---------- 底部频谱 ----------
-// 底部区域(y=52..63):一直显示 16 根伪频谱柱子,不被瞬时消息打断
-// (消息改走 y=42 中行)。Si4703 不输出音频电平,所以是装饰性律动——
-// 纯时间正弦波(不挂钩 RSSI,用户要求播放时柱子时刻动起来就行);
-// 每根带 1px 峰值保持标记。驱动方式见 tickSpectrum(全屏重画)。
-void MenuUi::drawBottomArea() {
-  // 16 根柱子:每根 6px 宽、间隔 2px,底部对齐(y=63)
-  for (int i = 0; i < kSpecBars; i++) {
-    int x = i * 8;
-    int h = _specLevel[i];
-    if (h > 0) _oled->fillRect(x, 64 - h, x + 5, 63, true);
-    int pk = _specPeak[i];
-    if (pk > 0) _oled->fillRect(x, 64 - pk, x + 5, 64 - pk, true);
-  }
-}
-
-void MenuUi::tickSpectrum() {
-  if (_state != UiState::HOME || !playing()) return;
-  uint32_t now = millis();
-  if (now - _lastSpecMs < 50) return;  // 20fps,流畅
-  _lastSpecMs = now;
-  _specTick++;
-  // 纯时间正弦律动,不挂钩 RSSI。柱高直接跟随正弦(不做快攻慢放),
-  // 上下都平滑,20fps 下流畅;中间高、两边低,波峰在各柱间流动。
-  // 最高 9px(y=55..63),留 3px 顶空,不顶到频谱区顶部。
-  for (int i = 0; i < kSpecBars; i++) {
-    float ph = (float)now / 1000.0f * 2.8f + (float)i * 0.9f;
-    float shape = 1.0f - fabsf(((float)i - 7.5f) / 9.0f);  // 中间高、两边低
-    int target = 2 + (int)(7.0f * shape * (0.5f + 0.5f * sinf(ph)));
-    if (target < 1) target = 1;
-    if (target > 9) target = 9;
-    _specLevel[i] = (uint8_t)target;  // 直接跟随,上下都平滑
-    // 峰值:柱子超过峰值则跟上,否则每帧降 1(20fps 下约 0.5s 落完)
-    if (_specLevel[i] >= _specPeak[i]) _specPeak[i] = _specLevel[i];
-    else if (_specPeak[i] > 0) _specPeak[i]--;
-  }
-  // 局部刷新在这块屏上始终不生效(v0.3.3/v0.3.4/v0.3.6/v0.3.7 四个
-  // 版本:柱子不动;v0.3.7 改 DC=1 后更糟,顶部全黑,已回退)。
-  // 改走全屏重画:每 50ms 置 _dirty,由 drawCurrent 全屏重发;
-  // 全屏重画是已验证的可靠路径(v0.3.5 柱子动起来了,只是 8fps
-  // 卡顿+顶部闪;这版提到 20fps,顶部重写更快、更不易察觉)。
-  // 全屏重发是突发写(约 1ms)。
-  _dirty = true;
 }
 
 void MenuUi::drawHomeClock() {

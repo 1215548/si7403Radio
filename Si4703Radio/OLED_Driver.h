@@ -48,9 +48,8 @@ void OLED_2IN42_Init(void);
 void OLED_2IN42_Clear(void);
 void OLED_2IN42_Display(const UBYTE *Image);
 void OLED_2IN42_Display_Array(const UBYTE *Image);
-// (局部刷新 OLED_2IN42_RefreshPages 已删:v0.3.3/v0.3.4/v0.3.6/v0.3.7
-//  四个版本在实机上均不生效,柱子不动;v0.3.7 改 DC=1 后更糟(顶部
-//  全黑)。频谱改走全屏重画,见 menu.cpp tickSpectrum)
+// (局部刷新 OLED_2IN42_RefreshPages 已删:四个版本在实机上均不生效;
+//  频谱柱子 v0.3.9 已删,另一位 AI 接手,见 menu.cpp drawHomePlaying)
 
 #endif  
 	 

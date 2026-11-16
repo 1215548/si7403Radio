@@ -53,8 +53,6 @@ public:
 private:
   // ---- 轮询 ----
   int displayRssi();  // 显示用 RSSI(带迟滞,防每秒抖动重画)
-  void drawBottomArea();  // 底部频谱/瞬时消息(y=52..63)
-  void tickSpectrum();    // 频谱动画推进 + 局部刷新
   void pollRadio();   // 1s 读状态 + 50ms RDS + LED
   void pollWifi();    // wifi.tick() + 时钟刷新节流
   // ---- 按键分发 ----
@@ -121,12 +119,6 @@ private:
   // 每秒重发一次全屏——这就是 1 秒一闪。迟滞后只有信号真正变化
   // (>=3)才更新显示,静止时零 SPI 流量。
   int _dispRssi = -1;
-  // 底部频谱(伪频谱,见 .cpp drawBottomArea/tickSpectrum)
-  static const int kSpecBars = 16;
-  uint8_t _specLevel[kSpecBars] = {0};
-  uint8_t _specPeak[kSpecBars] = {0};
-  uint32_t _lastSpecMs = 0;
-  uint32_t _specTick = 0;
   // 任务快照
   struct TaskRow {
     char name[17];
