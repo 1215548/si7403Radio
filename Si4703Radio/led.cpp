@@ -1,5 +1,14 @@
 // led.cpp -- 见 led.h
 #include "led.h"
+#include "pins.h"
+
+void Led::writeOut(bool on) {
+#if LED_ACTIVE_LOW
+  digitalWrite(_pin, on ? LOW : HIGH);
+#else
+  digitalWrite(_pin, on ? HIGH : LOW);
+#endif
+}
 
 void Led::begin(uint8_t pin) {
   _pin = pin;
@@ -11,14 +20,14 @@ void Led::on() {
   _blinking = false;
   _errorBlink = false;
   _steady = true;
-  digitalWrite(_pin, HIGH);
+  writeOut(true);
 }
 
 void Led::off() {
   _blinking = false;
   _errorBlink = false;
   _steady = false;
-  digitalWrite(_pin, LOW);
+  writeOut(false);
 }
 
 void Led::set(bool on) {
@@ -31,7 +40,7 @@ void Led::blink(uint16_t ms) {
   _errorBlink = false;
   _blinking = true;
   _untilMs = millis() + ms;
-  digitalWrite(_pin, HIGH);
+  writeOut(true);
 }
 
 void Led::blinkError() {
@@ -39,19 +48,19 @@ void Led::blinkError() {
   _errorBlink = true;
   _blinkLevel = true;
   _nextToggleMs = millis() + 250;
-  digitalWrite(_pin, HIGH);
+  writeOut(true);
 }
 
 void Led::update() {
   if (_blinking) {
     if ((int32_t)(millis() - _untilMs) >= 0) {
       _blinking = false;
-      digitalWrite(_pin, _steady ? HIGH : LOW);
+      writeOut(_steady);
     }
   } else if (_errorBlink) {
     if ((int32_t)(millis() - _nextToggleMs) >= 0) {
       _blinkLevel = !_blinkLevel;
-      digitalWrite(_pin, _blinkLevel ? HIGH : LOW);
+      writeOut(_blinkLevel);
       _nextToggleMs = millis() + 250;
     }
   }

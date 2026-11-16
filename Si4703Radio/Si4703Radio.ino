@@ -72,7 +72,7 @@ void setup() {
                 PIN_OLED_RES, PIN_OLED_DC, PIN_OLED_SCLK, PIN_OLED_MOSI);
   Serial.printf("SI4703 SEN=%d RST=%d SDIO=MOSI SCLK shared\n", PIN_SI4703_SEN,
                 PIN_SI4703_RST);
-  Serial.printf("LED=%d(HIGH on) KEYS=%d,%d,%d,%d,%d(low=pressed)\n", PIN_LED,
+  Serial.printf("LED=%d(LOW on) KEYS=%d,%d,%d,%d,%d(low=pressed)\n", PIN_LED,
                 PIN_KEY1, PIN_KEY2, PIN_KEY3, PIN_KEY4, PIN_KEY5);
 
   g_led.begin(PIN_LED);

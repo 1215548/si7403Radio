@@ -18,6 +18,7 @@ public:
   void update();
 
 private:
+  void writeOut(bool on);  // 按 LED_ACTIVE_LOW 把“亮/灭”翻成实际电平
   uint8_t _pin = 0;
   bool _steady = false;      // 常亮状态(闪烁结束后恢复到它)
   bool _blinking = false;    // 正在单次闪烁

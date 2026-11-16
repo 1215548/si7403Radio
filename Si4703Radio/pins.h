@@ -19,11 +19,16 @@
 #define PIN_SI4703_SCLK PIN_OLED_SCLK  // SCLK
 
 // ---------- 指示灯 ----------
-// IO9 高电平亮。注意:IO9 是 ESP32-C3 的 BOOT Strapping 脚,
-// 复位瞬间被拉低会进下载模式;若板子一上电就进下载模式、
-// 正常启动不了,先查 LED 到地的通路是否把 IO9 拉低,
-// 必要时把 LED 改到其他空闲脚(见 Si4703Radio/README.md)。
+// IO9 是 ESP32-C3 的 BOOT Strapping 脚:复位瞬间为低进下载模式,
+// 为高才正常从 Flash 启动。LED 原接法(IO9→电阻→LED→GND)会在
+// 复位时把 IO9 拉低,板子一直进下载模式(2026-11-16 实测)。
+// 改法:LED 改低电平有效——LED 正极→电阻→3V3,负极→IO9;
+// 复位时 IO9 经 LED 支路被拉到 3V3(无电流,LED 不亮),正常启动;
+// 程序拉低 IO9 灯亮。代码用 LED_ACTIVE_LOW=1 跟随此接法。
+// 若坚持高电平亮:IO9 后加 NPN 管驱动 LED(见 README),不要只加
+// 上拉——LED 支路到地的分压仍可能把脚拉到 2.48V 阈值以下。
 #define PIN_LED 9
+#define LED_ACTIVE_LOW 1  // 1=拉低亮(改线后);0=拉高亮(须加三极管驱动)
 
 // ---------- 按键(5 个,按下=低电平,内部上拉) ----------
 // 注意:KEY5 在 IO8,也是 Strapping 脚,上电/复位时不要按住按键;
