@@ -117,6 +117,11 @@ void MenuUi::tick() {
   pollRadio();
   pollWifi();
   tickSpectrum();  // 首页播放时底部频谱律动(局部刷新)
+  // 瞬时消息过期后清掉并重画中行(恢复显示台名),避免消息残留
+  if (_msg[0] && millis() >= _msgUntil) {
+    _msg[0] = '\0';
+    _dirty = true;
+  }
   if (_state == UiState::TASKS &&
       (uint32_t)(millis() - _lastTaskSnapMs) >= 2000) {
     snapshotTasks();
@@ -512,55 +517,49 @@ void MenuUi::drawHome() {
 void MenuUi::drawHomePlaying() {
   char buf[48];
   _oled->prepare();
-  // 顶行:台名 + 时间
-  const RdsInfo& r = _radio->rds();
-  if (r.psComplete) {
-    _oled->textEN(2, 0, r.ps, &Font12);
+  // 顶行(状态放顶部,Font8):RSSI + 立体声/音量/台序号 + 时间
+  // (用户要求 RSSI/ST/VOL 放顶部;台名改到 y=42 中行)
+  int rssi = displayRssi();
+  if (_presets->count() > 0) {
+    snprintf(buf, sizeof(buf), "RSSI %d %s V%d %d/%d", rssi,
+             _radio->isStereo() ? "ST" : "MO", _radio->volume(),
+             _presets->current() + 1, _presets->count());
   } else {
-    _oled->textEN(2, 0, "FM", &Font12);
+    snprintf(buf, sizeof(buf), "RSSI %d %s V%d", rssi,
+             _radio->isStereo() ? "ST" : "MO", _radio->volume());
   }
+  _oled->textEN(2, 2, buf, &Font8);  // Font8 居中于 12px 顶行(y=2..9)
   struct tm t;
   if (_wifi->getTime(t)) {
     snprintf(buf, sizeof(buf), "%02d:%02d", t.tm_hour, t.tm_min);
-    int w = (int)strlen(buf) * 7;  // Font12 宽 7px
-    _oled->textEN(126 - w, 0, buf, &Font12);
+    int w = (int)strlen(buf) * 5;  // Font8 宽 5px
+    _oled->textEN(126 - w, 2, buf, &Font8);
   }
   _oled->hline(0, 127, 14);
   // 大频率
   snprintf(buf, sizeof(buf), "%.2f", _radio->freqMHz());
   _oled->textEN(2, 16, buf, &Font24);
   _oled->textEN(2 + (int)strlen(buf) * 17 + 2, 28, "MHz", &Font12);
-  // 信号行:RSSI 直接显示数字(进度条已取消)+ 立体声/音量/台序号
-  // RSSI 用迟滞值(见 displayRssi),避免 ±1~3 的抖动每秒触发重画
-  int rssi = displayRssi();
-  snprintf(buf, sizeof(buf), "RSSI %d", rssi);
-  _oled->textEN(2, 42, buf, &Font8);
-  if (_presets->count() > 0) {
-    snprintf(buf, sizeof(buf), "%s V%d %d/%d",
-             _radio->isStereo() ? "ST" : "MO", _radio->volume(),
-             _presets->current() + 1, _presets->count());
+  // 中行:瞬时消息(如 CH/VOL/FOUND)优先,否则显示台名
+  // (消息改走中行,不再占用底部频谱区)
+  uint32_t now = millis();
+  if (now < _msgUntil && _msg[0]) {
+    _oled->textEN(2, 42, _msg, &Font8);
   } else {
-    snprintf(buf, sizeof(buf), "%s V%d",
-             _radio->isStereo() ? "ST" : "MO", _radio->volume());
+    const RdsInfo& r = _radio->rds();
+    _oled->textEN(2, 42, r.psComplete ? r.ps : "FM", &Font8);
   }
-  int w = (int)strlen(buf) * 5;  // Font8 宽 5px
-  _oled->textEN(126 - w, 42, buf, &Font8);
-  // 底部:频谱律动(或瞬时消息),见 drawBottomArea()
+  // 底部:频谱律动(一直显示,不被消息打断)
   drawBottomArea();
   _oled->flush();
 }
 
 // ---------- 底部频谱 ----------
-// 底部区域(y=52..63):平时显示 16 根伪频谱柱子;瞬时消息(如 VOL/FOUND)
-// 激活时改显示消息文字,消息过期后恢复频谱。Si4703 不输出音频电平,
-// 所以是装饰性律动——高度由正弦波(时间+相位)+RSSI 包络决定,信号越强
-// 整体越高;每根带 1px 峰值保持标记。
+// 底部区域(y=52..63):一直显示 16 根伪频谱柱子,不被瞬时消息打断
+// (消息改走 y=42 中行)。Si4703 不输出音频电平,所以是装饰性律动——
+// 高度由正弦波(时间+相位)+RSSI 包络决定,信号越强整体越高;
+// 每根带 1px 峰值保持标记。
 void MenuUi::drawBottomArea() {
-  uint32_t now = millis();
-  if (now < _msgUntil && _msg[0]) {
-    _oled->textEN(2, 52, _msg, &Font8);
-    return;
-  }
   // 16 根柱子:每根 6px 宽、间隔 2px,底部对齐(y=63)
   for (int i = 0; i < kSpecBars; i++) {
     int x = i * 8;
@@ -577,12 +576,14 @@ void MenuUi::tickSpectrum() {
   if (now - _lastSpecMs < 120) return;  // 约 8fps
   _lastSpecMs = now;
   _specTick++;
+  // (旧参数摆幅太小:中间柱子只在 5..8 之间动,3px,看着像不动。
+  //  改为基线更低、摆幅更大、速度更快:中间柱子 3..12,9px,周期约 1.8s)
   int rssi = displayRssi();  // 迟滞后的 RSSI(0..75)
-  int env = 2 + rssi * 6 / 75;  // 包络:信号越强整体越高
+  int env = 1 + rssi * 4 / 75;  // 基线 1..5:信号越强整体越高
   for (int i = 0; i < kSpecBars; i++) {
-    float ph = (float)now / 1000.0f * 2.2f + (float)i * 0.85f;
+    float ph = (float)now / 1000.0f * 3.5f + (float)i * 0.9f;
     float shape = 1.0f - fabsf(((float)i - 7.5f) / 9.0f);  // 中间高、两边低
-    int target = env + (int)(4.0f * shape * (0.5f + 0.5f * sinf(ph)));
+    int target = env + (int)(9.0f * shape * (0.5f + 0.5f * sinf(ph)));
     if (target < 1) target = 1;
     if (target > 12) target = 12;
     // 快攻慢放:上升立即跟,下降每帧最多降 1
