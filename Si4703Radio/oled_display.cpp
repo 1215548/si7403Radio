@@ -34,19 +34,36 @@ void OledDisplay::clear() {
 
 void OledDisplay::prepare() { Paint_Clear(BLACK); }
 
-void OledDisplay::flush() {
-  // 防频闪:帧内容与上次发出时完全相同就不调驱动——静止画面零 SPI
-  // 流量。变了则全屏重发(逐页突发,约 1ms,两种寻址模式下都对)。
-  // 局部刷新曾因横向寻址下页地址命令被忽略而错页,已改回全屏重发。
+uint32_t OledDisplay::frameHash() const {
   uint32_t h = 2166136261u;  // FNV-1a 32
   for (size_t i = 0; i < sizeof(s_frame); i++) {
     h ^= s_frame[i];
     h *= 16777619u;
   }
+  return h;
+}
+
+void OledDisplay::flush() {
+  // 防频闪:帧内容与上次发出时完全相同就不调驱动——静止画面零 SPI
+  // 流量。变了则全屏重发(逐页突发,约 1ms,两种寻址模式下都对)。
+  // 局部刷新曾因横向寻址下页地址命令被忽略而错页,已改回全屏重发。
+  uint32_t h = frameHash();
   if (_hashValid && h == _lastHash) return;
   _lastHash = h;
   _hashValid = true;
   OLED_2IN42_Display(s_frame);
+}
+
+void OledDisplay::clearRegion(int x0, int y0, int x1, int y1) {
+  Paint_DrawRectangle((UWORD)x0, (UWORD)y0, (UWORD)x1, (UWORD)y1, BLACK,
+                      DOT_PIXEL_1X1, DRAW_FILL_FULL);
+}
+
+void OledDisplay::refreshPages(uint8_t page0, uint8_t page1) {
+  OLED_2IN42_RefreshPages(s_frame, page0, page1);
+  // 同步哈希:显示内容与显存一致,下次 flush() 仍可正确跳过
+  _lastHash = frameHash();
+  _hashValid = true;
 }
 
 void OledDisplay::textEN(int x, int y, const char* s, sFONT* font,

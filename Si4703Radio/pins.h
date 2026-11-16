@@ -56,6 +56,6 @@
 #define SI4703_USE_XTAL 1
 
 // ---------- 固件版本与网络 ----------
-#define FW_VERSION "v0.3.2"   // 关于页显示;改动功能后手动 +1
+#define FW_VERSION "v0.3.3"   // 关于页显示;改动功能后手动 +1
 #define AP_SSID "Si4703Radio" // 网页配置服务的 AP 名(开放,无密码)
 #define AP_PASSWORD ""

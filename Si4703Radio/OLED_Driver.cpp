@@ -204,6 +204,30 @@ void OLED_2IN42_Display(const UBYTE *Image)
 }
 
 /********************************************************************************
+function:	只刷新指定的显示页(局部刷新,频谱动画用)
+note: 先强制页寻址模式(0x20/0x02),再逐页定页+列地址后突发写 128 字节。
+  寻址/顺序与 OLED_2IN42_Display 完全一致,只是只发 page0..page1。
+  局部刷新依赖 0xB0 页地址命令,横向寻址下该命令被忽略、会把页写到
+  错的位置(v0.3.0 信号条多处重复即此原因),所以每次先强制页模式。
+  底部频谱在 y=52..63,即第 6/7 页。
+********************************************************************************/
+void OLED_2IN42_RefreshPages(const UBYTE *Image, UBYTE page0, UBYTE page1)
+{
+    UBYTE pageBuf[128];
+    OLED_WriteReg(0x20);
+    OLED_WriteReg(0x02);
+    for (UWORD page=page0; page<=page1 && page<8; page++) {
+        OLED_WriteReg(0xB0 + page);
+        OLED_WriteReg(0x00);
+        OLED_WriteReg(0x10);
+        for (UWORD column=0; column<128; column++) {
+            pageBuf[column] = Image[(7-page) + column*8];
+        }
+        OLED_WriteData_Buffer(pageBuf, sizeof(pageBuf));
+    }
+}
+
+/********************************************************************************
 function:  Update array data to OLED
 ********************************************************************************/
 void OLED_2IN42_Display_Array(const UBYTE *Image)

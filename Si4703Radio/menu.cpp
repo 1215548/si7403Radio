@@ -4,6 +4,7 @@
 #include "cn_font.h"
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
+#include <math.h>
 #include <stdio.h>
 #include <string.h>
 
@@ -94,12 +95,7 @@ void MenuUi::pollRadio() {
     }
     _dirty = true;  // 每秒刷新(RSSI/时钟秒数)
   }
-  // RadioText 超长时滚动:每 600ms 刷一帧
-  if (_state == UiState::HOME && _radioOk && _radio->rds().rtLen > 25 &&
-      now - _lastRefreshMs >= 600) {
-    _lastRefreshMs = now;
-    _dirty = true;
-  }
+  // (旧:RadioText 超长时滚动,每 600ms 刷一帧——底部已改频谱,不再滚动 RT)
 }
 
 void MenuUi::pollWifi() {
@@ -120,6 +116,7 @@ void MenuUi::tick() {
   }
   pollRadio();
   pollWifi();
+  tickSpectrum();  // 首页播放时底部频谱律动(局部刷新)
   if (_state == UiState::TASKS &&
       (uint32_t)(millis() - _lastTaskSnapMs) >= 2000) {
     snapshotTasks();
@@ -533,12 +530,11 @@ void MenuUi::drawHomePlaying() {
   snprintf(buf, sizeof(buf), "%.2f", _radio->freqMHz());
   _oled->textEN(2, 16, buf, &Font24);
   _oled->textEN(2 + (int)strlen(buf) * 17 + 2, 28, "MHz", &Font12);
-  // 信号行:条形图 + RSSI 数字 + 立体声/音量/台序号
+  // 信号行:RSSI 直接显示数字(进度条已取消)+ 立体声/音量/台序号
   // RSSI 用迟滞值(见 displayRssi),避免 ±1~3 的抖动每秒触发重画
   int rssi = displayRssi();
-  _oled->bar(2, 42, 48, 7, rssi * 100 / 75);
-  snprintf(buf, sizeof(buf), "%d", rssi);
-  _oled->textEN(54, 42, buf, &Font8);
+  snprintf(buf, sizeof(buf), "RSSI %d", rssi);
+  _oled->textEN(2, 42, buf, &Font8);
   if (_presets->count() > 0) {
     snprintf(buf, sizeof(buf), "%s V%d %d/%d",
              _radio->isStereo() ? "ST" : "MO", _radio->volume(),
@@ -549,24 +545,57 @@ void MenuUi::drawHomePlaying() {
   }
   int w = (int)strlen(buf) * 5;  // Font8 宽 5px
   _oled->textEN(126 - w, 42, buf, &Font8);
-  // RT 行:瞬时消息优先,其次 RadioText 滚动,再是 CT 时间
+  // 底部:频谱律动(或瞬时消息),见 drawBottomArea()
+  drawBottomArea();
+  _oled->flush();
+}
+
+// ---------- 底部频谱 ----------
+// 底部区域(y=52..63):平时显示 16 根伪频谱柱子;瞬时消息(如 VOL/FOUND)
+// 激活时改显示消息文字,消息过期后恢复频谱。Si4703 不输出音频电平,
+// 所以是装饰性律动——高度由正弦波(时间+相位)+RSSI 包络决定,信号越强
+// 整体越高;每根带 1px 峰值保持标记。
+void MenuUi::drawBottomArea() {
   uint32_t now = millis();
   if (now < _msgUntil && _msg[0]) {
     _oled->textEN(2, 52, _msg, &Font8);
-  } else if (r.rtLen > 0) {
-    const uint8_t kWin = 25;
-    uint8_t off = 0;
-    if (r.rtLen > kWin) off = (uint8_t)((now / 600) % (r.rtLen - kWin + 1));
-    snprintf(buf, sizeof(buf), "%.25s", r.rt + off);
-    _oled->textEN(2, 52, buf, &Font8);
-  } else if (r.hasCt) {
-    snprintf(buf, sizeof(buf), "CT %04d-%02d-%02d %02d:%02d", r.ctYear,
-             r.ctMonth, r.ctDay, r.ctHour, r.ctMinute);
-    _oled->textEN(2, 52, buf, &Font8);
-  } else {
-    _oled->textEN(2, 52, "FM 87.5-108MHz 100kHz", &Font8);
+    return;
   }
-  _oled->flush();
+  // 16 根柱子:每根 6px 宽、间隔 2px,底部对齐(y=63)
+  for (int i = 0; i < kSpecBars; i++) {
+    int x = i * 8;
+    int h = _specLevel[i];
+    if (h > 0) _oled->fillRect(x, 64 - h, x + 5, 63, true);
+    int pk = _specPeak[i];
+    if (pk > 0) _oled->fillRect(x, 64 - pk, x + 5, 64 - pk, true);
+  }
+}
+
+void MenuUi::tickSpectrum() {
+  if (_state != UiState::HOME || !playing()) return;
+  uint32_t now = millis();
+  if (now - _lastSpecMs < 120) return;  // 约 8fps
+  _lastSpecMs = now;
+  _specTick++;
+  int rssi = displayRssi();  // 迟滞后的 RSSI(0..75)
+  int env = 2 + rssi * 6 / 75;  // 包络:信号越强整体越高
+  for (int i = 0; i < kSpecBars; i++) {
+    float ph = (float)now / 1000.0f * 2.2f + (float)i * 0.85f;
+    float shape = 1.0f - fabsf(((float)i - 7.5f) / 9.0f);  // 中间高、两边低
+    int target = env + (int)(4.0f * shape * (0.5f + 0.5f * sinf(ph)));
+    if (target < 1) target = 1;
+    if (target > 12) target = 12;
+    // 快攻慢放:上升立即跟,下降每帧最多降 1
+    if (target > _specLevel[i]) _specLevel[i] = (uint8_t)target;
+    else if (_specLevel[i] > target) _specLevel[i]--;
+    // 峰值保持:柱子超过峰值则跟上,否则隔一帧降 1
+    if (_specLevel[i] >= _specPeak[i]) _specPeak[i] = _specLevel[i];
+    else if ((_specTick & 1) == 0 && _specPeak[i] > 0) _specPeak[i]--;
+  }
+  // 只重画底部区域,局部刷新第 6/7 页(y=52..63 所在页),不碰上半屏
+  _oled->clearRegion(0, 52, 127, 63);
+  drawBottomArea();
+  _oled->refreshPages(6, 7);
 }
 
 void MenuUi::drawHomeClock() {
