@@ -557,8 +557,8 @@ void MenuUi::drawHomePlaying() {
 // ---------- 底部频谱 ----------
 // 底部区域(y=52..63):一直显示 16 根伪频谱柱子,不被瞬时消息打断
 // (消息改走 y=42 中行)。Si4703 不输出音频电平,所以是装饰性律动——
-// 高度由正弦波(时间+相位)+RSSI 包络决定,信号越强整体越高;
-// 每根带 1px 峰值保持标记。
+// 纯时间正弦波(不挂钩 RSSI,用户要求播放时柱子时刻动起来就行);
+// 每根带 1px 峰值保持标记。驱动方式见 tickSpectrum(全屏重画)。
 void MenuUi::drawBottomArea() {
   // 16 根柱子:每根 6px 宽、间隔 2px,底部对齐(y=63)
   for (int i = 0; i < kSpecBars; i++) {
@@ -576,14 +576,12 @@ void MenuUi::tickSpectrum() {
   if (now - _lastSpecMs < 120) return;  // 约 8fps
   _lastSpecMs = now;
   _specTick++;
-  // (旧参数摆幅太小:中间柱子只在 5..8 之间动,3px,看着像不动。
-  //  改为基线更低、摆幅更大、速度更快:中间柱子 3..12,9px,周期约 1.8s)
-  int rssi = displayRssi();  // 迟滞后的 RSSI(0..75)
-  int env = 1 + rssi * 4 / 75;  // 基线 1..5:信号越强整体越高
+  // 纯时间律动,不挂钩 RSSI(用户要求:播放时柱子时刻动起来就行)。
+  // 正弦波(时间+相位),中间柱子高、两边低,波峰在各柱间移动。
   for (int i = 0; i < kSpecBars; i++) {
     float ph = (float)now / 1000.0f * 3.5f + (float)i * 0.9f;
     float shape = 1.0f - fabsf(((float)i - 7.5f) / 9.0f);  // 中间高、两边低
-    int target = env + (int)(9.0f * shape * (0.5f + 0.5f * sinf(ph)));
+    int target = 2 + (int)(9.0f * shape * (0.5f + 0.5f * sinf(ph)));
     if (target < 1) target = 1;
     if (target > 12) target = 12;
     // 快攻慢放:上升立即跟,下降每帧最多降 1
@@ -593,10 +591,13 @@ void MenuUi::tickSpectrum() {
     if (_specLevel[i] >= _specPeak[i]) _specPeak[i] = _specLevel[i];
     else if ((_specTick & 1) == 0 && _specPeak[i] > 0) _specPeak[i]--;
   }
-  // 只重画底部区域,局部刷新第 6/7 页(y=52..63 所在页),不碰上半屏
-  _oled->clearRegion(0, 52, 127, 63);
-  drawBottomArea();
-  _oled->refreshPages(6, 7);
+  // v0.3.3/v0.3.4 的局部刷新(refreshPages)在实机上不生效,柱子不动
+  // (疑似页寻址模式未生效,0xB0 页命令被忽略、数据写到错的位置;
+  //  且它还会更新 _lastHash,让全屏 flush 误判显示已同步而跳过发送)。
+  // 改走全屏重画:每 120ms 置 _dirty,由 drawCurrent 全屏重发;
+  // 全屏重画是已验证的可靠路径(切台消息更新即走此路)。全屏重发
+  // 是突发写(约 1ms),8fps 下不会闪。
+  _dirty = true;
 }
 
 void MenuUi::drawHomeClock() {

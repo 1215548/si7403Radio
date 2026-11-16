@@ -48,8 +48,8 @@ void OLED_2IN42_Init(void);
 void OLED_2IN42_Clear(void);
 void OLED_2IN42_Display(const UBYTE *Image);
 void OLED_2IN42_Display_Array(const UBYTE *Image);
-// 局部刷新:只发 page0..page1 两页(频谱动画用);见 .cpp 注释。
-void OLED_2IN42_RefreshPages(const UBYTE *Image, UBYTE page0, UBYTE page1);
+// (局部刷新 OLED_2IN42_RefreshPages 已删:v0.3.3/v0.3.4 在实机上不生效,
+//  见 menu.cpp tickSpectrum;频谱改走全屏重画)
 
 #endif  
 	 
