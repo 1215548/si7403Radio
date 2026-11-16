@@ -573,31 +573,31 @@ void MenuUi::drawBottomArea() {
 void MenuUi::tickSpectrum() {
   if (_state != UiState::HOME || !playing()) return;
   uint32_t now = millis();
-  if (now - _lastSpecMs < 120) return;  // 约 8fps
+  if (now - _lastSpecMs < 50) return;  // 20fps,流畅
   _lastSpecMs = now;
   _specTick++;
-  // 纯时间律动,不挂钩 RSSI(用户要求:播放时柱子时刻动起来就行)。
-  // 正弦波(时间+相位),中间柱子高、两边低,波峰在各柱间移动。
+  // 纯时间正弦律动,不挂钩 RSSI。柱高直接跟随正弦(不做快攻慢放),
+  // 上下都平滑,20fps 下流畅;中间高、两边低,波峰在各柱间流动。
+  // 最高 9px(y=55..63),留 3px 顶空,不顶到频谱区顶部。
   for (int i = 0; i < kSpecBars; i++) {
-    float ph = (float)now / 1000.0f * 3.5f + (float)i * 0.9f;
+    float ph = (float)now / 1000.0f * 2.8f + (float)i * 0.9f;
     float shape = 1.0f - fabsf(((float)i - 7.5f) / 9.0f);  // 中间高、两边低
-    int target = 2 + (int)(9.0f * shape * (0.5f + 0.5f * sinf(ph)));
+    int target = 2 + (int)(7.0f * shape * (0.5f + 0.5f * sinf(ph)));
     if (target < 1) target = 1;
-    if (target > 12) target = 12;
-    // 快攻慢放:上升立即跟,下降每帧最多降 1
-    if (target > _specLevel[i]) _specLevel[i] = (uint8_t)target;
-    else if (_specLevel[i] > target) _specLevel[i]--;
-    // 峰值保持:柱子超过峰值则跟上,否则隔一帧降 1
+    if (target > 9) target = 9;
+    _specLevel[i] = (uint8_t)target;  // 直接跟随,上下都平滑
+    // 峰值:柱子超过峰值则跟上,否则每帧降 1(20fps 下约 0.5s 落完)
     if (_specLevel[i] >= _specPeak[i]) _specPeak[i] = _specLevel[i];
-    else if ((_specTick & 1) == 0 && _specPeak[i] > 0) _specPeak[i]--;
+    else if (_specPeak[i] > 0) _specPeak[i]--;
   }
-  // v0.3.3/v0.3.4 的局部刷新(refreshPages)在实机上不生效,柱子不动
-  // (疑似页寻址模式未生效,0xB0 页命令被忽略、数据写到错的位置;
-  //  且它还会更新 _lastHash,让全屏 flush 误判显示已同步而跳过发送)。
-  // 改走全屏重画:每 120ms 置 _dirty,由 drawCurrent 全屏重发;
-  // 全屏重画是已验证的可靠路径(切台消息更新即走此路)。全屏重发
-  // 是突发写(约 1ms),8fps 下不会闪。
-  _dirty = true;
+  // 局部刷新第 6/7 页(只动底部,不碰上半屏)。
+  // v0.3.5 全屏重画 8fps 会闪顶部、且卡顿;局部刷新只发 256 字节,
+  // 20fps 下依然轻量。注意 RefreshPages 里不再发 0x20/0x02——
+  // 显示已在 init 里设为页寻址,重复发有误解风险(v0.3.3/v0.3.4
+  // 的教训:0xB0 页命令被忽略、数据写到错的位置)。
+  _oled->clearRegion(0, 52, 127, 63);
+  drawBottomArea();
+  _oled->refreshPages(6, 7);
 }
 
 void MenuUi::drawHomeClock() {
