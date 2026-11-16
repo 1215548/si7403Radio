@@ -147,6 +147,15 @@ bool Si4703Radio::begin() {
 #else
   writeRegister(SI4703_REG_TEST1, SI4703_TEST1_POWERDOWN);
 #endif
+#if SI4703_USE_XTAL
+  // 冷启动关键:32.768kHz 晶振从零起振很慢(数百毫秒~1 秒以上),
+  // 手册初始化流程(§4.11 图 9)要求先提供 RCLK 再置 ENABLE,
+  // XOSCEN 置位后必须等起振稳定才能上电,否则上电/调谐失败。
+  // 下载后重跑能工作,是因为模块一直带电、晶振没停过——1ms 的
+  // RST 脉冲根本停不掉高 Q 晶振(衰减时间常数约 0.5 秒);重新
+  // 上电则晶振从零起振,原来 XOSCEN 置位后几毫秒就上电,必然失败。
+  delay(1000);
+#endif
 
   // SYSCONFIG1:去加重 50us(中国),开 RDS,GPIO 高阻
   _shadow[SI4703_REG_SYSCONFIG1 - 0x02] =
@@ -186,7 +195,14 @@ bool Si4703Radio::begin() {
   }
 
   _freqMHz = RADIO_DEFAULT_FREQ_MHZ;
-  if (!tune(_freqMHz)) {
+  bool tuned = tune(_freqMHz);
+  if (!tuned) {
+    // 兜底:晶振若还没完全稳,再等 500ms 重调一次
+    delay(500);
+    _freqMHz = RADIO_DEFAULT_FREQ_MHZ;
+    tuned = tune(_freqMHz);
+  }
+  if (!tuned) {
     snprintf(_error, sizeof(_error), "powerup ok, tune %.1fMHz no STC",
              _freqMHz);
     return false;
