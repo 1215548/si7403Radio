@@ -109,6 +109,8 @@ void setup() {
     g_led.blinkError();  // 慢闪=收音机故障
   }
   g_menu.begin(&g_led, &g_keys, &g_oled, &g_radio, &g_wifi, &g_presets);
+  // 开机自动搜台(无预存台时跑一次,见 menu.cpp bootScan)
+  g_menu.bootScan();
   printHelp();
 }
 

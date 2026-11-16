@@ -99,9 +99,15 @@ static void OLED_InitReg(void)
 
     OLED_WriteReg(0x00);//---set low column address
     OLED_WriteReg(0x10);//---set high column address
-    
+
+    // 寻址模式:0x02=页寻址(不要改回 0x00 横向寻址)。局部刷新依赖
+    // 0xB0 页地址命令随机写某一页;横向模式下 0xB0/0x00/0x10 命令
+    // 全部被忽略,数据按顺序流写到当前指针处——改了哪页就错写到哪页,
+    // 表现为同一行内容在多个纵向位置重复出现并每秒闪动(2026-11-16
+    // 实机照片:信号条在 4 个位置重复)。全屏流写在两种模式下都对,
+    // 所以旧版全屏刷新看不出问题,局部刷新一上就暴露。
     OLED_WriteReg(0x20);
-    OLED_WriteReg(0x00);
+    OLED_WriteReg(0x02);
         
     OLED_WriteReg(0xFF);
     

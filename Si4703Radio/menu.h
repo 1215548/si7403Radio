@@ -44,6 +44,8 @@ public:
   void setRadioOk(bool ok) { _radioOk = ok; _dirty = true; }
   void showMsg(const char* msg);  // 瞬时消息(首页 RT 行显示 2 秒,限 ASCII)
   void manualTune(float freq);    // 串口 f 命令:调频 + 清预存台序号
+  // 开机自动搜台:仅收音机正常且无预存台时跑一次(见 .cpp bootScan)
+  void bootScan();
   // 供自动搜台回调用(见 menu.cpp 底部静态函数)
   void scanProgress(int found, float freq);
   bool scanCancelCheck();

@@ -376,6 +376,16 @@ bool MenuUi::scanCancelCheck() {
   return (p & KEY1_MASK) != 0;
 }
 
+void MenuUi::bootScan() {
+  // 开机自动搜台:仅收音机正常且无预存台时跑一次。首次烧录 huge_app
+  // 会清 NVS、预存台为空,不扫就停在默认 98.0MHz 无台可听;有预存台
+  // 时 setup 里已调到第 1 台,不必重扫(全波段最长约 2 分钟)。
+  // 搜台中按 KEY1 可取消;扫完自动回首页并出声。
+  if (!_radioOk) return;
+  if (_presets->count() > 0) return;
+  runScan();
+}
+
 void MenuUi::runScan() {
   if (!_radioOk) {
     showMsg("NO RADIO");
