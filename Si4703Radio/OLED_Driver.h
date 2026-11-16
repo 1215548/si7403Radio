@@ -48,10 +48,9 @@ void OLED_2IN42_Init(void);
 void OLED_2IN42_Clear(void);
 void OLED_2IN42_Display(const UBYTE *Image);
 void OLED_2IN42_Display_Array(const UBYTE *Image);
-// 局部刷新:只发 page0..page1 两页(频谱动画用)。
-// 注意:这里不发 0x20/0x02——显示已在 init 里设为页寻址,重复发
-// 有误解风险(v0.3.3/v0.3.4 的教训);只定页+列地址后写数据。
-void OLED_2IN42_RefreshPages(const UBYTE *Image, UBYTE page0, UBYTE page1);
+// (局部刷新 OLED_2IN42_RefreshPages 已删:v0.3.3/v0.3.4/v0.3.6/v0.3.7
+//  四个版本在实机上均不生效,柱子不动;v0.3.7 改 DC=1 后更糟(顶部
+//  全黑)。频谱改走全屏重画,见 menu.cpp tickSpectrum)
 
 #endif  
 	 

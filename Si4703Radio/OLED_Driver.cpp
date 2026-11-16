@@ -106,36 +106,33 @@ static void OLED_InitReg(void)
     // 表现为同一行内容在多个纵向位置重复出现并每秒闪动(2026-11-16
     // 实机照片:信号条在 4 个位置重复)。全屏流写在两种模式下都对,
     // 所以旧版全屏刷新看不出问题,局部刷新一上就暴露。
-    // **关键:命令参数必须用 OLED_WriteData(DC=1)送。**
-    // v0.3.3~v0.3.6 的教训:参数用 OLED_WriteReg(DC=0)送会被当成
-    // 新命令,0x20 一直没真正设上页寻址,显示实际留在横向模式——
-    // 局部刷新数据写到屏顶(顶部一闪而过的一条线),底部柱子不动。
-    // 全屏流写在横向模式下也对,所以静态画面一直正常,只有局部
-    // 刷新暴露问题。以下所有双字节命令的参数一律改走 WriteData。
+    // **v0.3.7 的教训:参数改走 OLED_WriteData(DC=1)后实机只剩
+    // FM+柱子、顶部全黑,比 DC=0 更糟——已回退到 DC=0(与 v0.3.6
+    // 相同)。局部刷新在这块屏上始终不生效,频谱改走全屏重画。**
     OLED_WriteReg(0x20);
-    OLED_WriteData(0x02);
+    OLED_WriteReg(0x02);
 
     OLED_WriteReg(0xFF);
 
     OLED_WriteReg(0xA6);
 
     OLED_WriteReg(0xA8);
-    OLED_WriteData(0x3F);
+    OLED_WriteReg(0x3F);
 
     OLED_WriteReg(0xD3);
-    OLED_WriteData(0x00);
+    OLED_WriteReg(0x00);
 
     OLED_WriteReg(0xD5);
-    OLED_WriteData(0x80);
+    OLED_WriteReg(0x80);
 
     OLED_WriteReg(0xD9);
-    OLED_WriteData(0x22);
+    OLED_WriteReg(0x22);
 
     OLED_WriteReg(0xDA);
-    OLED_WriteData(0x12);
+    OLED_WriteReg(0x12);
 
     OLED_WriteReg(0xDB);
-    OLED_WriteData(0x40);
+    OLED_WriteReg(0x40);
 
 }
 
@@ -201,27 +198,6 @@ void OLED_2IN42_Display(const UBYTE *Image)
         OLED_WriteReg(0x10);
 
         /* gather page data then burst it in one transaction */
-        for (UWORD column=0; column<128; column++) {
-            pageBuf[column] = Image[(7-page) + column*8];
-        }
-        OLED_WriteData_Buffer(pageBuf, sizeof(pageBuf));
-    }
-}
-
-/********************************************************************************
-function:	只刷新指定的显示页(局部刷新,频谱动画用)
-note: 只定页+列地址后突发写 128 字节/页,与 OLED_2IN42_Display 逐页
-  写法完全一致,只是只发 page0..page1。显示已在 init 里设为页寻址,
-  这里不再发 0x20/0x02(重复发有误解风险,见 v0.3.6 说明)。
-  底部频谱在 y=52..63,即第 6/7 页。
-********************************************************************************/
-void OLED_2IN42_RefreshPages(const UBYTE *Image, UBYTE page0, UBYTE page1)
-{
-    UBYTE pageBuf[128];
-    for (UWORD page=page0; page<=page1 && page<8; page++) {
-        OLED_WriteReg(0xB0 + page);
-        OLED_WriteReg(0x00);
-        OLED_WriteReg(0x10);
         for (UWORD column=0; column<128; column++) {
             pageBuf[column] = Image[(7-page) + column*8];
         }

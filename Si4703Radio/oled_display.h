@@ -31,10 +31,7 @@ public:
   void bar(int x, int y, int w, int h, int pct);
   // 只清显存里一个矩形区域(不刷新);频谱动画逐帧重画底部用
   void clearRegion(int x0, int y0, int x1, int y1);
-  // 局部刷新:只把显存的 page0..page1 两页发到屏上(频谱动画用,
-  // 底部 y=52..63 在第 6/7 页)。写完同步 _lastHash,保证 flush()
-  // 的哈希跳过判断仍正确。
-  void refreshPages(uint8_t page0, uint8_t page1);
+  // (局部刷新 refreshPages 已删:见 OLED_Driver.h 注释)
 
   // 通用两行消息(启动画面、搜台中、按键反馈等)
   void showMessage(const char* line1, const char* line2);

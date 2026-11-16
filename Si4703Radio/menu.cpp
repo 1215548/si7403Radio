@@ -590,14 +590,13 @@ void MenuUi::tickSpectrum() {
     if (_specLevel[i] >= _specPeak[i]) _specPeak[i] = _specLevel[i];
     else if (_specPeak[i] > 0) _specPeak[i]--;
   }
-  // 局部刷新第 6/7 页(只动底部,不碰上半屏)。
-  // v0.3.5 全屏重画 8fps 会闪顶部、且卡顿;局部刷新只发 256 字节,
-  // 20fps 下依然轻量。注意 RefreshPages 里不再发 0x20/0x02——
-  // 显示已在 init 里设为页寻址,重复发有误解风险(v0.3.3/v0.3.4
-  // 的教训:0xB0 页命令被忽略、数据写到错的位置)。
-  _oled->clearRegion(0, 52, 127, 63);
-  drawBottomArea();
-  _oled->refreshPages(6, 7);
+  // 局部刷新在这块屏上始终不生效(v0.3.3/v0.3.4/v0.3.6/v0.3.7 四个
+  // 版本:柱子不动;v0.3.7 改 DC=1 后更糟,顶部全黑,已回退)。
+  // 改走全屏重画:每 50ms 置 _dirty,由 drawCurrent 全屏重发;
+  // 全屏重画是已验证的可靠路径(v0.3.5 柱子动起来了,只是 8fps
+  // 卡顿+顶部闪;这版提到 20fps,顶部重写更快、更不易察觉)。
+  // 全屏重发是突发写(约 1ms)。
+  _dirty = true;
 }
 
 void MenuUi::drawHomeClock() {

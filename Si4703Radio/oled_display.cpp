@@ -59,13 +59,6 @@ void OledDisplay::clearRegion(int x0, int y0, int x1, int y1) {
                       DOT_PIXEL_1X1, DRAW_FILL_FULL);
 }
 
-void OledDisplay::refreshPages(uint8_t page0, uint8_t page1) {
-  OLED_2IN42_RefreshPages(s_frame, page0, page1);
-  // 同步哈希:显示内容与显存一致,下次 flush() 仍可正确跳过
-  _lastHash = frameHash();
-  _hashValid = true;
-}
-
 void OledDisplay::textEN(int x, int y, const char* s, sFONT* font,
                          bool invert) {
   Paint_DrawString_EN((UWORD)x, (UWORD)y, s, font, invert ? BLACK : WHITE,
