@@ -1,16 +1,15 @@
 // Si4703Radio.ino -- ESP32-C3 Supermini + SSD1309 OLED + Si4703 FM 收音
 //
-// 分阶段调通,先 1 后 2:
-//   阶段 1(OLED/按键/LED):上电即见启动画面,按任意键串口+屏幕都有反馈,
-//     LED 闪一下;串口发 t 看测试图。收音机还没通也不影响这一阶段。
-//   阶段 2(Si4703):上电自动读 ID、上电、调到默认频率;成功则主界面
-//     显示频率/RSSI/立体声/音量,LED 常亮=立体声信号;失败则屏幕显示
-//     NO RADIO、LED 慢闪、串口打印诊断,按键/屏幕照常工作,串口发 r 重试。
-//
-// 按键(按下=低电平):KEY1 音量- / KEY2 音量+ / KEY3 频率-0.1MHz /
-//   KEY4 频率+0.1MHz / KEY5 向上搜台。静音走串口 m。
+// 界面:菜单系统(见 menu.h)。首页 KEY5 进菜单,菜单 KEY3 上/KEY4 下/
+//   KEY5 确认/KEY1 返回。首页三态:收音播放(时间/频道/音量/RSSI/
+//   台序号)/时钟(NTP 时间+日历+农历)/预留。
+// 菜单:WiFi配置/收音机设置/任务状态/日期时间/关于版本/返回首页。
+//   WiFi 页 KEY5 开关网页配置服务(AP "Si4703Radio" 192.168.4.1,
+//   网页可改 SSID/密码/API Key,保存后自动重连;NTP 校时,农历走
+//   api.530.news)。收音机设置页可自动搜台(预存台存 NVS)。
 // 串口(115200,USB CDC):f 98.5 调频 / s 向上搜台 / S 向下搜台 /
-//   v 12 音量 / m 静音开关 / i 读全部寄存器 / t 测试图 / r 重启收音机 / ? 帮助
+//   v 12 音量 / m 静音开关 / i 读全部寄存器 / t 测试图 / r 重启收音机 /
+//   p 列预存台 / ? 帮助
 // 编译:见本目录 README.md(板子 ESP32C3 Dev Module,CDCOnBoot=cdc)。
 #include <Arduino.h>
 #include "pins.h"
@@ -18,25 +17,21 @@
 #include "keys.h"
 #include "oled_display.h"
 #include "radio_si4703.h"
+#include "wifi_portal.h"
+#include "presets.h"
+#include "menu.h"
 
 static Led g_led;
 static Keys g_keys;
 static OledDisplay g_oled;
 static Si4703Radio g_radio;
+static WifiPortal g_wifi;
+static Presets g_presets;
+static MenuUi g_menu;
 
 static const uint8_t kKeyPins[KEY_COUNT] = {
     PIN_KEY1, PIN_KEY2, PIN_KEY3, PIN_KEY4, PIN_KEY5,
 };
-
-static bool g_radioOk = false;
-static float g_freqMHz = RADIO_DEFAULT_FREQ_MHZ;
-static int g_volume = RADIO_DEFAULT_VOLUME;
-static bool g_muted = false;
-static char g_msg[32] = "";
-static bool g_uiDirty = true;
-static uint32_t g_lastStatusMs = 0;
-static uint32_t g_lastRdsMs = 0;
-static uint32_t g_lastRtScrollMs = 0;  // RT 滚动帧计时
 
 static void printRds() {
   const RdsInfo& r = g_radio.rds();
@@ -59,26 +54,10 @@ static void printHelp() {
   Serial.println(F("f 98.5  tune   s seek up   S seek down"));
   Serial.println(F("v 12    volume 0-15   m mute toggle"));
   Serial.println(F("i       dump regs 00h-0Fh + RDS   t OLED test pattern"));
-  Serial.println(F("r       re-init radio   ? this help"));
-  Serial.println(F("keys: K1 VOL- K2 VOL+ K3 F- K4 F+ K5 SEEK"));
+  Serial.println(F("r       re-init radio   p list presets   ? this help"));
+  Serial.println(F("keys HOME: K5 menu  K4/K3 ch  K2/K1 vol"));
+  Serial.println(F("keys MENU: K3 up K4 down K5 enter K1 back"));
   Serial.println(F("RDS auto: PS/RT/CT on screen + serial when station sends RDS"));
-}
-
-static void refreshUi() {
-  if (g_radioOk) {
-    g_freqMHz = g_radio.freqMHz();
-    g_volume = g_radio.volume();
-    g_muted = g_radio.isMuted();
-  }
-  g_oled.showRadio(g_freqMHz, g_radioOk ? g_radio.rssi() : 0,
-                   g_radioOk ? g_radio.isStereo() : false, g_volume, g_muted,
-                   g_radioOk, g_msg,
-                   g_radioOk ? &g_radio.rds() : nullptr, millis());
-}
-
-static void setMsg(const char* fmt, float v) {
-  snprintf(g_msg, sizeof(g_msg), fmt, v);
-  g_uiDirty = true;
 }
 
 void setup() {
@@ -87,7 +66,7 @@ void setup() {
   uint32_t t0 = millis();
   while (!Serial && (uint32_t)(millis() - t0) < 2000) delay(10);
   Serial.println();
-  Serial.println(F("Si4703Radio boot"));
+  Serial.println(F("Si4703Radio boot " FW_VERSION));
   Serial.printf("OLED CS=%d RES=%d DC=%d SCLK=%d MOSI=%d\n", PIN_OLED_CS,
                 PIN_OLED_RES, PIN_OLED_DC, PIN_OLED_SCLK, PIN_OLED_MOSI);
   Serial.printf("SI4703 SEN=%d RST=%d SDIO=MOSI SCLK shared\n", PIN_SI4703_SEN,
@@ -102,87 +81,35 @@ void setup() {
   Serial.println(F("OLED init done (write-only SPI, check screen lights)"));
   delay(800);
 
-  // ---- 阶段 2:Si4703 ----
-  g_radioOk = g_radio.begin();
-  if (g_radioOk) {
+  // ---- WiFi:读 NVS,自动连已保存的网络(非阻塞);农历任务随之启动 ----
+  g_wifi.begin();
+  // ---- 预存台:NVS 恢复 ----
+  g_presets.begin();
+  Serial.printf("presets loaded: %d\n", g_presets.count());
+
+  // ---- Si4703 ----
+  bool radioOk = g_radio.begin();
+  if (radioOk) {
     Serial.printf("RADIO OK: %s DEVICEID=0x%04X CHIPID=0x%04X freq=%.2fMHz\n",
                   g_radio.isSi4703() ? "Si4703" : "Si4702(no RDS)",
                   g_radio.deviceId(), g_radio.chipId(), g_radio.freqMHz());
-    snprintf(g_msg, sizeof(g_msg), "RADIO OK %.2fMHz", g_radio.freqMHz());
     g_led.set(g_radio.isStereo());
+    if (g_presets.count() > 0) {
+      // 有预存台:开机调到第 1 个预存台
+      g_presets.tuneCurrent(g_radio);
+      Serial.printf("tuned to preset 1/%d: %.2fMHz\n", g_presets.count(),
+                    g_radio.freqMHz());
+    }
   } else {
     Serial.printf("RADIO FAIL: %s\n", g_radio.error());
     Serial.printf("  DEVICEID=0x%04X CHIPID=0x%04X\n", g_radio.deviceId(),
                   g_radio.chipId());
     Serial.println(F("  check: SEN/SDIO/SCLK/RST wiring, 3.3V power,"));
     Serial.println(F("  32.768kHz crystal on module, then send 'r' to retry."));
-    snprintf(g_msg, sizeof(g_msg), "RADIO FAIL");
     g_led.blinkError();  // 慢闪=收音机故障
   }
+  g_menu.begin(&g_led, &g_keys, &g_oled, &g_radio, &g_wifi, &g_presets);
   printHelp();
-  refreshUi();
-  g_uiDirty = false;
-}
-
-static void handleKeyPress(uint8_t pressed) {
-  // 每按一个键 LED 闪一下(按键反馈),串口+屏幕同步显示
-  g_led.blink(120);
-  if (pressed & KEY1_MASK) {
-    if (g_volume > 0) g_volume--;
-    if (g_radioOk) g_radio.setVolume((uint8_t)g_volume);
-    Serial.printf("KEY1 VOL- -> %d\n", g_volume);
-    snprintf(g_msg, sizeof(g_msg), "KEY1 VOL- %d", g_volume);
-  }
-  if (pressed & KEY2_MASK) {
-    if (g_volume < 15) g_volume++;
-    if (g_radioOk) g_radio.setVolume((uint8_t)g_volume);
-    Serial.printf("KEY2 VOL+ -> %d\n", g_volume);
-    snprintf(g_msg, sizeof(g_msg), "KEY2 VOL+ %d", g_volume);
-  }
-  if (pressed & KEY3_MASK) {
-    g_freqMHz -= RADIO_SPACE_MHZ;
-    if (g_freqMHz < RADIO_BAND_LOW_MHZ) g_freqMHz = RADIO_BAND_LOW_MHZ;
-    if (g_radioOk) {
-      bool ok = g_radio.tune(g_freqMHz);
-      g_freqMHz = g_radio.freqMHz();
-      Serial.printf("KEY3 F- tune %.2fMHz %s RSSI=%d %s\n", g_freqMHz,
-                    ok ? "OK" : "no STC", g_radio.rssi(),
-                    g_radio.lastAfcRail() ? "AFC-RAIL" : "");
-    } else {
-      Serial.printf("KEY3 F- -> %.2fMHz (no radio)\n", g_freqMHz);
-    }
-    setMsg("KEY3 %.2fMHz", g_freqMHz);
-  }
-  if (pressed & KEY4_MASK) {
-    g_freqMHz += RADIO_SPACE_MHZ;
-    if (g_freqMHz > RADIO_BAND_HIGH_MHZ) g_freqMHz = RADIO_BAND_HIGH_MHZ;
-    if (g_radioOk) {
-      bool ok = g_radio.tune(g_freqMHz);
-      g_freqMHz = g_radio.freqMHz();
-      Serial.printf("KEY4 F+ tune %.2fMHz %s RSSI=%d %s\n", g_freqMHz,
-                    ok ? "OK" : "no STC", g_radio.rssi(),
-                    g_radio.lastAfcRail() ? "AFC-RAIL" : "");
-    } else {
-      Serial.printf("KEY4 F+ -> %.2fMHz (no radio)\n", g_freqMHz);
-    }
-    setMsg("KEY4 %.2fMHz", g_freqMHz);
-  }
-  if (pressed & KEY5_MASK) {
-    if (g_radioOk) {
-      g_oled.showMessage("SEEKING...", "up");
-      Serial.println(F("KEY5 SEEK up..."));
-      bool found = g_radio.seek(true);
-      g_freqMHz = g_radio.freqMHz();
-      Serial.printf("SEEK %s: %.2fMHz RSSI=%d %s\n",
-                    found ? "found" : "fail/edge", g_freqMHz, g_radio.rssi(),
-                    g_radio.lastSeekFailed() ? "SF/BL" : "");
-      setMsg(found ? "SEEK %.2fMHz" : "SEEK FAIL %.2fMHz", g_freqMHz);
-    } else {
-      Serial.println(F("KEY5 SEEK (no radio)"));
-      snprintf(g_msg, sizeof(g_msg), "KEY5 NO RADIO");
-    }
-  }
-  g_uiDirty = true;
 }
 
 static void handleSerial() {
@@ -191,123 +118,99 @@ static void handleSerial() {
   line.trim();
   if (line.length() == 0) return;
   char cmd = line.charAt(0);
+  bool radioOk = g_radio.ok();
   if (cmd == '?') {
     printHelp();
   } else if (cmd == 'f') {
     float f = line.substring(1).toFloat();
     if (f >= RADIO_BAND_LOW_MHZ && f <= RADIO_BAND_HIGH_MHZ) {
-      g_freqMHz = f;
-      if (g_radioOk) {
-        bool ok = g_radio.tune(g_freqMHz);
-        g_freqMHz = g_radio.freqMHz();
-        Serial.printf("tune %.2fMHz %s RSSI=%d\n", g_freqMHz,
-                      ok ? "OK" : "no STC", g_radio.rssi());
-      }
-      setMsg("TUNE %.2fMHz", g_freqMHz);
+      g_menu.manualTune(f);
+      Serial.printf("tune %.2fMHz RSSI=%d\n", g_radio.freqMHz(),
+                    g_radio.rssi());
     } else {
       Serial.println(F("freq out of 87.5-108MHz"));
     }
   } else if (cmd == 's' || cmd == 'S') {
-    if (g_radioOk) {
-      g_oled.showMessage("SEEKING...", cmd == 's' ? "up" : "down");
+    if (radioOk) {
       bool found = g_radio.seek(cmd == 's');
-      g_freqMHz = g_radio.freqMHz();
       Serial.printf("SEEK %s: %.2fMHz RSSI=%d\n", found ? "found" : "fail",
-                    g_freqMHz, g_radio.rssi());
-      setMsg(found ? "SEEK %.2fMHz" : "SEEK FAIL %.2fMHz", g_freqMHz);
+                    g_radio.freqMHz(), g_radio.rssi());
+      char buf[24];
+      snprintf(buf, sizeof(buf), found ? "SEEK %.2fMHz" : "SEEK FAIL %.2fMHz",
+               g_radio.freqMHz());
+      g_menu.showMsg(buf);
     } else {
       Serial.println(F("no radio"));
     }
   } else if (cmd == 'v') {
     int v = line.substring(1).toInt();
     if (v >= 0 && v <= 15) {
-      g_volume = v;
-      if (g_radioOk) g_radio.setVolume((uint8_t)v);
-      Serial.printf("VOL %d\n", g_volume);
-      snprintf(g_msg, sizeof(g_msg), "VOL %d", g_volume);
-      g_uiDirty = true;
+      if (radioOk) g_radio.setVolume((uint8_t)v);
+      Serial.printf("VOL %d\n", v);
+      char buf[16];
+      snprintf(buf, sizeof(buf), "VOL %d", v);
+      g_menu.showMsg(buf);
     }
   } else if (cmd == 'm') {
-    if (g_radioOk) {
-      g_muted = !g_muted;
-      g_radio.setMute(g_muted);
-      Serial.printf("MUTE %s\n", g_muted ? "ON" : "OFF");
-      snprintf(g_msg, sizeof(g_msg), "%s", g_muted ? "MUTE ON" : "MUTE OFF");
-      g_uiDirty = true;
+    if (radioOk) {
+      bool m = !g_radio.isMuted();
+      g_radio.setMute(m);
+      Serial.printf("MUTE %s\n", m ? "ON" : "OFF");
+      g_menu.showMsg(m ? "MUTE ON" : "MUTE OFF");
     } else {
       Serial.println(F("no radio"));
     }
   } else if (cmd == 'i') {
     Serial.printf("DEVICEID=0x%04X CHIPID=0x%04X %s ok=%d\n", g_radio.deviceId(),
                   g_radio.chipId(), g_radio.isSi4703() ? "Si4703" : "Si4702",
-                  (int)g_radioOk);
+                  (int)radioOk);
     uint16_t regs[16];
     g_radio.readAllRegs(regs);
     for (uint8_t i = 0; i < 16; i++) {
       Serial.printf("  %02Xh=0x%04X\n", i, regs[i]);
     }
-    Serial.printf("freq=%.2fMHz RSSI=%d ST=%d VOL=%d MUTE=%d\n", g_freqMHz,
-                  g_radio.rssi(), (int)g_radio.isStereo(), g_volume,
-                  (int)g_muted);
+    Serial.printf("freq=%.2fMHz RSSI=%d ST=%d VOL=%d MUTE=%d\n",
+                  g_radio.freqMHz(), g_radio.rssi(), (int)g_radio.isStereo(),
+                  g_radio.volume(), (int)g_radio.isMuted());
+    Serial.printf("presets: %d (current %d)\n", g_presets.count(),
+                  g_presets.current() + 1);
+    Serial.printf("wifi: %s %s\n", g_wifi.connected() ? "connected" : "off",
+                  g_wifi.ssid().c_str());
     printRds();
-    g_uiDirty = true;
   } else if (cmd == 't') {
     g_oled.showTestPattern();
     Serial.println(F("OLED test pattern shown"));
     delay(1500);
-    g_uiDirty = true;
+    g_menu.refresh();
   } else if (cmd == 'r') {
     Serial.println(F("re-init radio..."));
     g_oled.showMessage("RADIO INIT...", "");
-    g_radioOk = g_radio.begin();
-    if (g_radioOk) {
+    bool ok = g_radio.begin();
+    g_menu.setRadioOk(ok);
+    if (ok) {
       Serial.printf("RADIO OK: %s CHIPID=0x%04X freq=%.2fMHz\n",
                     g_radio.isSi4703() ? "Si4703" : "Si4702(no RDS)",
                     g_radio.chipId(), g_radio.freqMHz());
-      snprintf(g_msg, sizeof(g_msg), "RADIO OK %.2fMHz", g_radio.freqMHz());
+      g_menu.showMsg("RADIO OK");
       g_led.set(g_radio.isStereo());
     } else {
       Serial.printf("RADIO FAIL: %s\n", g_radio.error());
-      snprintf(g_msg, sizeof(g_msg), "RADIO FAIL");
+      g_menu.showMsg("RADIO FAIL");
       g_led.blinkError();
     }
-    g_uiDirty = true;
+  } else if (cmd == 'p') {
+    Serial.printf("presets: %d\n", g_presets.count());
+    for (int i = 0; i < g_presets.count(); i++) {
+      Station s = g_presets.get(i);
+      Serial.printf("  %d: %.2fMHz RSSI %d%s\n", i + 1, s.freq, s.rssi,
+                    i == g_presets.current() ? " <=" : "");
+    }
   } else {
     Serial.println(F("unknown cmd, send ? for help"));
   }
 }
 
 void loop() {
-  g_led.update();
-  uint8_t pressed = g_keys.update();
-  if (pressed) handleKeyPress(pressed);
+  g_menu.tick();
   handleSerial();
-
-  // 每秒读一次状态:刷新 RSSI/立体声/实际频率,LED 跟随立体声
-  if (g_radioOk && (uint32_t)(millis() - g_lastStatusMs) >= 1000) {
-    g_lastStatusMs = millis();
-    if (g_radio.readStatus()) {
-      g_led.set(g_radio.isStereo() && !g_radio.isMuted());
-      g_uiDirty = true;
-    }
-  }
-  // 每 50ms 收一次 RDS 组(见 radio_si4703.cpp pollRds 注释);
-  // 有新内容就串口打印并刷新屏幕
-  if (g_radioOk && (uint32_t)(millis() - g_lastRdsMs) >= 50) {
-    g_lastRdsMs = millis();
-    if (g_radio.pollRds()) {
-      printRds();
-      g_uiDirty = true;
-    }
-  }
-  // RadioText 超长时滚动:每 600ms 刷一帧
-  if (g_radioOk && g_radio.rds().rtLen > 21 &&
-      (uint32_t)(millis() - g_lastRtScrollMs) >= 600) {
-    g_lastRtScrollMs = millis();
-    g_uiDirty = true;
-  }
-  if (g_uiDirty) {
-    refreshUi();
-    g_uiDirty = false;
-  }
 }

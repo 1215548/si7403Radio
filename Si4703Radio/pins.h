@@ -54,3 +54,8 @@
 // 若模块既无晶振、RCLK 脚又没接外部时钟,调谐/搜台会失败,
 // 此时置 0 也无济于事,须先给 RCLK 提供 32.768kHz 时钟。
 #define SI4703_USE_XTAL 1
+
+// ---------- 固件版本与网络 ----------
+#define FW_VERSION "v0.3.0"   // 关于页显示;改动功能后手动 +1
+#define AP_SSID "Si4703Radio" // 网页配置服务的 AP 名(开放,无密码)
+#define AP_PASSWORD ""
