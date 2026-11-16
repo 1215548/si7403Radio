@@ -35,9 +35,9 @@ void OledDisplay::clear() {
 void OledDisplay::prepare() { Paint_Clear(BLACK); }
 
 void OledDisplay::flush() {
-  // 防频闪第二层:帧内容与上次发出时完全相同就不调驱动——1 秒轮询/
-  // 600ms 滚动在无变化时零 SPI 流量,静止画面不闪。
-  // 变了则走局部刷新(只发变化的页,每页一次突发事务),见 OLED_Driver.cpp。
+  // 防频闪:帧内容与上次发出时完全相同就不调驱动——静止画面零 SPI
+  // 流量。变了则全屏重发(逐页突发,约 1ms,两种寻址模式下都对)。
+  // 局部刷新曾因横向寻址下页地址命令被忽略而错页,已改回全屏重发。
   uint32_t h = 2166136261u;  // FNV-1a 32
   for (size_t i = 0; i < sizeof(s_frame); i++) {
     h ^= s_frame[i];
@@ -46,7 +46,7 @@ void OledDisplay::flush() {
   if (_hashValid && h == _lastHash) return;
   _lastHash = h;
   _hashValid = true;
-  OLED_2IN42_Display_Partial(s_frame);
+  OLED_2IN42_Display(s_frame);
 }
 
 void OledDisplay::textEN(int x, int y, const char* s, sFONT* font,

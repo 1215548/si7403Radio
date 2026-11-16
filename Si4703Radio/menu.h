@@ -52,6 +52,7 @@ public:
 
 private:
   // ---- 轮询 ----
+  int displayRssi();  // 显示用 RSSI(带迟滞,防每秒抖动重画)
   void pollRadio();   // 1s 读状态 + 50ms RDS + LED
   void pollWifi();    // wifi.tick() + 时钟刷新节流
   // ---- 按键分发 ----
@@ -113,6 +114,11 @@ private:
   uint32_t _lastStatusMs = 0;
   uint32_t _lastRdsMs = 0;
   uint32_t _lastRefreshMs = 0;
+  // 显示用 RSSI(带迟滞,见 .cpp displayRssi):真实 RSSI 每秒都在
+  // ±1~3 抖动,直接画会让信号条/数字每秒都变、帧哈希每秒都变、
+  // 每秒重发一次全屏——这就是 1 秒一闪。迟滞后只有信号真正变化
+  // (>=3)才更新显示,静止时零 SPI 流量。
+  int _dispRssi = -1;
   // 任务快照
   struct TaskRow {
     char name[17];

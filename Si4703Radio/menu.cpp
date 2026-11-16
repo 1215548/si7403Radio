@@ -65,6 +65,15 @@ static void printRdsLine(Si4703Radio* radio) {
                   r.ctDay, r.ctHour, r.ctMinute);
 }
 
+// 显示用 RSSI(带迟滞):真实 RSSI 每秒 ±1~3 抖动,直接画会让信号条
+// 和数字每秒都变、帧哈希每秒都变、每秒重发一次全屏——1 秒一闪的
+// 触发器。迟滞后只有变化 >=3 才更新显示值,静止时零 SPI 流量。
+int MenuUi::displayRssi() {
+  int r = _radio->rssi();
+  if (_dispRssi < 0 || abs(r - _dispRssi) >= 3) _dispRssi = r;
+  return _dispRssi;
+}
+
 void MenuUi::pollRadio() {
   uint32_t now = millis();
   if (_radioOk && now - _lastRdsMs >= 50) {
@@ -525,8 +534,10 @@ void MenuUi::drawHomePlaying() {
   _oled->textEN(2, 16, buf, &Font24);
   _oled->textEN(2 + (int)strlen(buf) * 17 + 2, 28, "MHz", &Font12);
   // 信号行:条形图 + RSSI 数字 + 立体声/音量/台序号
-  _oled->bar(2, 42, 48, 7, _radio->rssi() * 100 / 75);
-  snprintf(buf, sizeof(buf), "%d", _radio->rssi());
+  // RSSI 用迟滞值(见 displayRssi),避免 ±1~3 的抖动每秒触发重画
+  int rssi = displayRssi();
+  _oled->bar(2, 42, 48, 7, rssi * 100 / 75);
+  snprintf(buf, sizeof(buf), "%d", rssi);
   _oled->textEN(54, 42, buf, &Font8);
   if (_presets->count() > 0) {
     snprintf(buf, sizeof(buf), "%s V%d %d/%d",

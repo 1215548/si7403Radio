@@ -48,13 +48,6 @@ void OLED_2IN42_Init(void);
 void OLED_2IN42_Clear(void);
 void OLED_2IN42_Display(const UBYTE *Image);
 void OLED_2IN42_Display_Array(const UBYTE *Image);
-// 只发变化的页(与上次发出的内容比对,见 OLED_Driver.cpp):
-// 全屏重发是频闪的主因——逐字节事务 1024 次、数毫秒逐页滚动更新,
-// 每秒一次肉眼可见。局部刷新后 1 秒一跳只动 0~2 页,且每页一次
-// 突发事务,无全屏滚动。
-void OLED_2IN42_Display_Partial(const UBYTE *Image);
-// 显示内容被 Clear() 等旁路改写后调用,下次局部刷新改全屏重发。
-void OLED_2IN42_InvalidateShadow(void);
 
 #endif  
 	 
