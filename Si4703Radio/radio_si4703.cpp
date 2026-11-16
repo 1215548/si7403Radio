@@ -223,7 +223,9 @@ bool Si4703Radio::seek(bool up) {
   _shadow[SI4703_REG_POWERCFG - 0x02] = pwr;
   writeRegister(SI4703_REG_POWERCFG, pwr);
   delay(150);  // quiet,见 waitStc 注释
-  bool done = waitStc(5000, 100);
+  // 全波段 205 个频道 x 每频道最长 60ms ≈ 12.3s,超时须覆盖整圈,
+  // 否则还没扫完就报失败;每按一次 KEY5 从当前频道继续扫。
+  bool done = waitStc(12000, 100);
   // 清 SEEK 位以清除 STC/SF/BL
   pwr = (uint16_t)(_shadow[SI4703_REG_POWERCFG - 0x02] &
                    (uint16_t)~SI4703_PWR_SEEK);
