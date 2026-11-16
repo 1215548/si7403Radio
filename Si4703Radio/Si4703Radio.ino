@@ -85,7 +85,8 @@ void setup() {
   // ---- 阶段 2:Si4703 ----
   g_radioOk = g_radio.begin();
   if (g_radioOk) {
-    Serial.printf("RADIO OK: DEVICEID=0x%04X CHIPID=0x%04X freq=%.2fMHz\n",
+    Serial.printf("RADIO OK: %s DEVICEID=0x%04X CHIPID=0x%04X freq=%.2fMHz\n",
+                  g_radio.isSi4703() ? "Si4703" : "Si4702(no RDS)",
                   g_radio.deviceId(), g_radio.chipId(), g_radio.freqMHz());
     snprintf(g_msg, sizeof(g_msg), "RADIO OK %.2fMHz", g_radio.freqMHz());
     g_led.set(g_radio.isStereo());
@@ -217,8 +218,9 @@ static void handleSerial() {
       Serial.println(F("no radio"));
     }
   } else if (cmd == 'i') {
-    Serial.printf("DEVICEID=0x%04X CHIPID=0x%04X ok=%d\n", g_radio.deviceId(),
-                  g_radio.chipId(), (int)g_radioOk);
+    Serial.printf("DEVICEID=0x%04X CHIPID=0x%04X %s ok=%d\n", g_radio.deviceId(),
+                  g_radio.chipId(), g_radio.isSi4703() ? "Si4703" : "Si4702",
+                  (int)g_radioOk);
     uint16_t regs[16];
     g_radio.readAllRegs(regs);
     for (uint8_t i = 0; i < 16; i++) {
@@ -238,8 +240,9 @@ static void handleSerial() {
     g_oled.showMessage("RADIO INIT...", "");
     g_radioOk = g_radio.begin();
     if (g_radioOk) {
-      Serial.printf("RADIO OK: CHIPID=0x%04X freq=%.2fMHz\n", g_radio.chipId(),
-                    g_radio.freqMHz());
+      Serial.printf("RADIO OK: %s CHIPID=0x%04X freq=%.2fMHz\n",
+                    g_radio.isSi4703() ? "Si4703" : "Si4702(no RDS)",
+                    g_radio.chipId(), g_radio.freqMHz());
       snprintf(g_msg, sizeof(g_msg), "RADIO OK %.2fMHz", g_radio.freqMHz());
       g_led.set(g_radio.isStereo());
     } else {

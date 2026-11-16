@@ -45,8 +45,12 @@
 #define SI4703_TEST1_POWERDOWN 0x0100  // 上电前 bits13:0 保持值
 #define SI4703_TEST1_POWERUP   0x3C04  // 上电后 bits13:0 保持值
 
-// 期望的 ID(手册 §6):上电前 CHIPID=0x1200,上电后=0x1253;
+// 期望的 ID(手册 §6):C19 版 Si4703 上电前 CHIPID=0x1200,上电后=0x1253;
 // DEVICEID 低 12 位 MFGID=0x242。
+// 但市售“Si4703”模块的芯片未必是 C19 版 Si4703:实测某模块上电前
+// CHIPID=0x0800(DEV=0,即 Si4702,REV=2),调频功能与 Si4703 相同,
+// 只是没有 RDS。因此这里不卡死 0x1200/0x1253,只认 MFGID 和
+// DEV/FIRMWARE 位段,见 radio_si4703.cpp 的 begin()。
 #define SI4703_CHIPID_BEFORE_POWERUP 0x1200
 #define SI4703_CHIPID_AFTER_POWERUP  0x1253
 #define SI4703_MFGID 0x242
@@ -60,6 +64,8 @@ public:
   const char* error() const { return _error; }
   uint16_t deviceId() const { return _deviceId; }
   uint16_t chipId() const { return _chipId; }
+  // true=Si4703(含 RDS),false=Si4702(无 RDS,调频功能相同)
+  bool isSi4703() const { return _isSi4703; }
 
   bool tune(float freqMHz);       // 手动调频,等 STC
   bool seek(bool up);             // 搜台,到有效台停;撞到波段边沿返回 false
@@ -96,6 +102,7 @@ private:
   }
 
   bool _ok = false;
+  bool _isSi4703 = true;  // 由 CHIPID 的 DEV 位段判定,见 begin()
   char _error[64] = "";
   uint16_t _deviceId = 0;
   uint16_t _chipId = 0;

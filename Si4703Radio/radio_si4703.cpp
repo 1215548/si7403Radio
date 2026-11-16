@@ -131,13 +131,12 @@ bool Si4703Radio::begin() {
              "MFGID mismatch: DEVICEID=0x%04X", _deviceId);
     return false;
   }
-  if (_chipId != SI4703_CHIPID_BEFORE_POWERUP) {
-    // 0x1200 是 Si4703 上电前应有的值;不是它,多半是总线模式选错
-    // (如复位时 SEN/SDIO 电平不对进了 2-wire)或芯片不是 Si4703。
-    snprintf(_error, sizeof(_error),
-             "CHIPID before powerup=0x%04X, expect 0x1200", _chipId);
-    return false;
-  }
+  // 上电前 CHIPID 只做“像不像 Si470x”的判断,不卡死 0x1200:
+  // DEV 位段(9:6)bit3 置位=Si4703(8/9),清零=Si4702(0/1)。
+  // 实测有模块报 0x0800(DEV=0,Si4702),旧代码在此直接 return,
+  // 导致下面的 TEST1/配置/上电写操作一行都没执行——这就是
+  // `i` 打印里 02h~06h 全 0、07h 仍是复位值 0x0100 的原因。
+  _isSi4703 = (_chipId & 0x0200) != 0;
 
   // 晶振:须在 ENABLE=1 之前使能(手册 §4.7/寄存器 07h)。
   // 上电前 bits13:0 保持 0x0100。
@@ -167,10 +166,18 @@ bool Si4703Radio::begin() {
   delay(110);
 
   _chipId = readRegister(SI4703_REG_CHIPID);
-  if (_chipId != SI4703_CHIPID_AFTER_POWERUP) {
-    snprintf(_error, sizeof(_error),
-             "powerup failed: CHIPID=0x%04X, expect 0x1253", _chipId);
-    return false;
+  // 上电成功的标志:DEV 由 0/8 变为 1/9 且 FIRMWARE 非零。
+  // 不卡死 0x1253(C19 Si4703 的值),Si4702 上电后是 DEV=1。
+  {
+    uint16_t dev = (uint16_t)((_chipId >> 6) & 0xF);
+    uint16_t fw = (uint16_t)(_chipId & 0x3F);
+    if (!((dev == 1 || dev == 9) && fw != 0)) {
+      snprintf(_error, sizeof(_error),
+               "powerup failed: CHIPID=0x%04X (DEV=%d FW=0x%02X)", _chipId,
+               dev, fw);
+      return false;
+    }
+    _isSi4703 = (dev == 9);
   }
 
   _freqMHz = RADIO_DEFAULT_FREQ_MHZ;
