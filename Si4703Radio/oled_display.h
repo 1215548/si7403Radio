@@ -9,12 +9,21 @@
 
 class OledDisplay {
 public:
-  // 初始化 SPI + 复位 + 显存。写-only SPI 无法回读,只要代码跑到
-  // 这里就返回 true;屏亮不亮要看硬件(电源/复位/接线),见 README。
-  bool begin();
+  // 初始化 SPI + 复位 + 显存,并画出 Linux 风格开机画面。
+  // 写-only SPI 无法回读,只要代码跑到这里就返回 true;屏亮不亮
+  // 要看硬件(电源/复位/接线),见 README。
+  bool begin(const char* version);
   void clear();   // 清屏并立即刷新
   void prepare(); // 清显存(不刷新,画完一组图元后调 flush)
   void flush();   // 把显存刷到屏上
+
+  // ---- 开机动画(页对齐:标头页 0 / 日志页 1..6 / 进度页 7) ----
+  // state: 0=进行中(..) 1=成功(OK) 2=失败(!!)
+  void bootLog(const char* msg, int state);
+  void bootUpdateLast(bool ok);  // 把最后一条 .. 改成 OK/!!
+  void bootProgress(int pct);    // 底部进度条 0..100
+  void bootAnimateProgress(int from, int to, uint32_t ms);
+  void bootFinish();             // 100% + "root@si4703:~# _" 光标闪烁
 
   // ---- 通用图元(逻辑坐标 128x64) ----
   // ASCII 字符串;invert=true 为反白(黑字白底)
@@ -50,4 +59,16 @@ private:
   uint32_t _lastHash = 0;  // 上次发出帧的 FNV-1a 哈希(防频闪,见 .cpp flush)
   bool _hashValid = false;
   uint32_t frameHash() const;  // 显存 FNV-1a 哈希
+
+  // 开机画面内部状态
+  static const int kBootRows = 6;
+  char _bootLines[kBootRows][26] = {{0}};
+  int _bootCount = 0;
+  int _bootPct = 0;
+  uint32_t _bootStartMs = 0;
+  void bootDrawHeader(const char* version);
+  void bootDrawProgressBar();
+  void bootDrawLogs();
+  void bootDrawLogRow(int row);
+  void bootDrawPrompt(bool cursorOn);
 };

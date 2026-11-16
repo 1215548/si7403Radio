@@ -52,6 +52,7 @@ private:
   String _lunarShort;   // "十月初八"
   String _ssidCache;    // 当前连接的 SSID(连接中为空)
   uint32_t _lastNtpCheckMs = 0;
+  uint32_t _lastServerMs = 0;
   uint32_t _lastLunarTryMs = 0;
   // 农历任务
   TaskHandle_t _lunarTask = nullptr;

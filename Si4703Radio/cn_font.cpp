@@ -1,8 +1,22 @@
 // cn_font.cpp -- 见 cn_font.h
 #include "cn_font.h"
 #include "gb2312_font.h"
+#include "gb2312_font_deng.h"
 #include "GUI_Paint.h"
 #include "fonts.h"
+
+// 当前字库字形表:0=思源(Noto),1=等线(DengXian)
+static const uint8_t (*s_glyphs)[32] = kGb2312Glyphs;
+static int s_fontId = 0;
+
+int CnFont_font() { return s_fontId; }
+
+const char* CnFont_fontName() { return s_fontId == 1 ? "等线" : "思源"; }
+
+void CnFont_setFont(int id) {
+  s_fontId = (id == 1) ? 1 : 0;
+  s_glyphs = (s_fontId == 1) ? kGb2312DengGlyphs : kGb2312Glyphs;
+}
 
 const uint8_t* CnFont_findGlyph(uint16_t unicode) {
   // kGb2312Unicode 按 Unicode 升序,二分查找
@@ -10,7 +24,7 @@ const uint8_t* CnFont_findGlyph(uint16_t unicode) {
   while (lo <= hi) {
     int mid = (lo + hi) / 2;
     uint16_t v = kGb2312Unicode[mid];
-    if (v == unicode) return kGb2312Glyphs[mid];
+    if (v == unicode) return s_glyphs[mid];
     if (v < unicode) lo = mid + 1;
     else hi = mid - 1;
   }

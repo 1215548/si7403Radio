@@ -15,7 +15,7 @@ static UBYTE s_frame[((OLED_2IN42_WIDTH % 8 == 0)
                           : (OLED_2IN42_WIDTH / 8 + 1)) *
                      OLED_2IN42_HEIGHT];
 
-bool OledDisplay::begin() {
+bool OledDisplay::begin(const char* version) {
   System_Init();
   OLED_2IN42_Init();
   Driver_Delay_ms(500);
@@ -23,7 +23,12 @@ bool OledDisplay::begin() {
   Paint_NewImage(s_frame, OLED_2IN42_WIDTH, OLED_2IN42_HEIGHT, 270, BLACK);
   Paint_SelectImage(s_frame);
   Paint_Clear(BLACK);
-  showMessage("Si4703 FM", "OLED OK");
+  bootDrawHeader(version);
+  bootDrawProgressBar();
+  flush();  // 首帧整屏发一次,之后开机动画全部按页局部刷新
+  // 全屏第一页偶发被吞,标头单独补发一次(物理页 7,128 字节)
+  refreshRows(0, 7);
+  _bootStartMs = millis();
   return true;
 }
 
@@ -151,6 +156,137 @@ void OledDisplay::bar(int x, int y, int w, int h, int pct) {
                         (UWORD)(x + fw), (UWORD)(y + h - 2), WHITE,
                         DOT_PIXEL_1X1, DRAW_FILL_FULL);
   }
+}
+
+// ---------- 开机动画 ----------
+// 屏幕按 8px 页对齐:
+//   y=0..7   标头(反白):SI4703 RADIO OS + 版本
+//   y=8..55  6 行内核日志(每行 8px,正好一页)
+//   y=56..63 进度条 / 最后变成 shell 提示符
+// 首帧整屏刷一次,之后日志/进度/提示都只刷新对应页。
+void OledDisplay::bootDrawHeader(const char* version) {
+  fillRect(0, 0, 127, 8, true);  // 反白标头,填 y=0..7
+  textEN(1, 0, "SI4703 RADIO OS", &Font8, true);
+  if (version && version[0]) {
+    int w = (int)strlen(version) * 5;
+    textEN(126 - w, 0, version, &Font8, true);
+  }
+}
+
+void OledDisplay::bootDrawProgressBar() {
+  int pct = _bootPct;
+  if (pct < 0) pct = 0;
+  if (pct > 100) pct = 100;
+  char fill[19];
+  int n = pct * 18 / 100;
+  for (int i = 0; i < 18; i++) fill[i] = (i < n) ? '#' : '-';
+  fill[18] = '\0';
+  char line[26];
+  snprintf(line, sizeof(line), "[%s] %3d%%", fill, pct);
+  clearRegion(0, 56, 127, 64);  // 清 y=56..63
+  textEN(1, 56, line, &Font8);
+}
+
+void OledDisplay::bootProgress(int pct) {
+  if (pct < 0) pct = 0;
+  if (pct > 100) pct = 100;
+  _bootPct = pct;
+  bootDrawProgressBar();
+  refreshRows(56, 63);  // 物理页 0
+}
+
+void OledDisplay::bootDrawLogRow(int row) {
+  if (row < 0 || row >= kBootRows) return;
+  int y = 8 + row * 8;
+  clearRegion(0, y, 127, y + 8);
+  if (row < _bootCount && _bootLines[row][0])
+    textEN(1, y, _bootLines[row], &Font8);
+}
+
+void OledDisplay::bootDrawLogs() {
+  clearRegion(0, 8, 127, 56);  // 清 6 行日志区
+  for (int i = 0; i < kBootRows; i++) {
+    if (i < _bootCount && _bootLines[i][0])
+      textEN(1, 8 + i * 8, _bootLines[i], &Font8);
+  }
+  refreshRows(8, 55);  // 逻辑页 1..6 -> 物理页 6..1
+}
+
+void OledDisplay::bootLog(const char* msg, int state) {
+  const char* st = (state == 0) ? ".." : (state == 1 ? "OK" : "!!");
+  char line[26];
+  float t = (float)(millis() - _bootStartMs) / 1000.0f;
+  // [ 0.0] OLED SSD1309 [OK]  = 24 字符,一行放得下
+  snprintf(line, sizeof(line), "[%4.1f] %-12.12s [%s]", t,
+           msg ? msg : "", st);
+  if (_bootCount < kBootRows) {
+    snprintf(_bootLines[_bootCount], sizeof(_bootLines[0]), "%s", line);
+    _bootCount++;
+  } else {
+    memmove(_bootLines[0], _bootLines[1],
+            sizeof(_bootLines[0]) * (kBootRows - 1));
+    snprintf(_bootLines[kBootRows - 1], sizeof(_bootLines[0]), "%s", line);
+  }
+  bootDrawLogs();
+}
+
+void OledDisplay::bootUpdateLast(bool ok) {
+  if (_bootCount <= 0) return;
+  int idx = (_bootCount < kBootRows) ? (_bootCount - 1) : (kBootRows - 1);
+  int len = (int)strlen(_bootLines[idx]);
+  // 行尾是 "[..]":把中间两个点改成 OK 或 !!
+  if (len >= 4) {
+    _bootLines[idx][len - 3] = ok ? 'O' : '!';
+    _bootLines[idx][len - 2] = ok ? 'K' : '!';
+  }
+  int y = 8 + idx * 8;
+  bootDrawLogRow(idx);
+  refreshRows(y, y + 7);  // 单页局部刷新
+}
+
+void OledDisplay::bootAnimateProgress(int from, int to, uint32_t ms) {
+  if (from < 0) from = 0;
+  if (to > 100) to = 100;
+  if (ms == 0) {
+    bootProgress(to);
+    return;
+  }
+  uint32_t start = millis();
+  int last = -1;
+  while ((uint32_t)(millis() - start) < ms) {
+    int pct = from + (int)((int32_t)(to - from) *
+                           (int32_t)(millis() - start) / (int32_t)ms);
+    if (pct != last) {
+      bootProgress(pct);
+      last = pct;
+    }
+    delay(40);
+  }
+  bootProgress(to);
+}
+
+void OledDisplay::bootDrawPrompt(bool cursorOn) {
+  clearRegion(0, 56, 127, 64);
+  const char* p = "root@si4703:~#";
+  textEN(1, 56, p, &Font8);
+  if (cursorOn) {
+    int cx = 1 + (int)strlen(p) * 5 + 2;
+    fillRect(cx, 56, cx + 4, 64, true);  // 5x8 方块光标
+  }
+}
+
+void OledDisplay::bootFinish() {
+  bootProgress(100);
+  delay(150);
+  // shell 提示符 + 闪烁方块光标,像 Linux 启动完停在登录/终端
+  for (int i = 0; i < 6; i++) {
+    bootDrawPrompt(i & 1);
+    refreshRows(56, 63);
+    delay(100);
+  }
+  bootDrawPrompt(true);
+  refreshRows(56, 63);
+  delay(80);
 }
 
 void OledDisplay::showMessage(const char* line1, const char* line2) {

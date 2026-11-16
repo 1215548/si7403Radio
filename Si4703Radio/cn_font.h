@@ -7,6 +7,12 @@
 #pragma once
 #include <Arduino.h>
 
+// 字体:0=思源黑体(Noto Sans CJK SC,16px),1=等线(DengXian,16px)
+// 两套字库共用同一份 Unicode 索引;菜单 12px 由当前字库运行时降采样。
+int CnFont_font();
+const char* CnFont_fontName();  // "思源" / "等线"
+void CnFont_setFont(int id);    // 0/1,越界按 0 处理
+
 // 在字库里找 Unicode 对应字形(32 字节),查无返回 nullptr
 const uint8_t* CnFont_findGlyph(uint16_t unicode);
 // 在 (x,y) 画一个汉字(16x16);invert=true 时画黑字(用于反白行)

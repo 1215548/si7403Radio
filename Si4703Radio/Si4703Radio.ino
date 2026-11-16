@@ -65,6 +65,11 @@ static void printHelp() {
 
 void setup() {
   Serial.begin(115200);
+  // USB CDC 默认发送超时 100ms、最多连续重试 20 次 ≈ 2 秒。PC 串口
+  // 没打开/不读数据时,一次 Serial.printf 就能把主循环卡住 1-2 秒
+  // (按键日志在按键处理前打印,表现为按键后 1-2 秒屏幕才动)。
+  // 设为 0:缓冲区满就直接丢日志,绝不阻塞界面。
+  Serial.setTxTimeoutMs(0);
   // 等 USB CDC 接上(最多 2 秒,不接 USB 也不卡死)
   uint32_t t0 = millis();
   while (!Serial && (uint32_t)(millis() - t0) < 2000) delay(10);
@@ -80,18 +85,31 @@ void setup() {
   g_led.begin(PIN_LED);
   g_led.on();  // 上电指示:初始化期间常亮
   g_keys.begin(kKeyPins);
-  g_oled.begin();  // 显示 "Si4703 FM / OLED OK"
+
+  // ---- 开机动画:Linux 风启动日志 + 进度条(见 oled_display.cpp) ----
+  g_oled.begin(FW_VERSION);
   Serial.println(F("OLED init done (write-only SPI, check screen lights)"));
-  delay(800);
+  g_oled.bootLog("OLED SSD1309", 1);
+  g_oled.bootProgress(10);
+  g_oled.bootAnimateProgress(10, 30, 500);
 
   // ---- WiFi:读 NVS,自动连已保存的网络(非阻塞);农历任务随之启动 ----
   g_wifi.begin();
+  g_oled.bootLog("WIFI ASYNC", 1);  // 非阻塞,连接结果稍后由主界面显示
+  g_oled.bootProgress(40);
   // ---- 预存台:NVS 恢复 ----
   g_presets.begin();
   Serial.printf("presets loaded: %d\n", g_presets.count());
+  char bl[24];
+  snprintf(bl, sizeof(bl), "PRESETS %d", g_presets.count());
+  g_oled.bootLog(bl, 1);
+  g_oled.bootProgress(55);
 
   // ---- Si4703 ----
+  g_oled.bootLog("SI4703 BUS", 0);  // 先显示进行中
+  g_oled.bootProgress(65);
   bool radioOk = g_radio.begin();
+  g_oled.bootUpdateLast(radioOk);
   if (radioOk) {
     Serial.printf("RADIO OK: %s DEVICEID=0x%04X CHIPID=0x%04X freq=%.2fMHz\n",
                   g_radio.isSi4703() ? "Si4703" : "Si4702(no RDS)",
@@ -103,6 +121,8 @@ void setup() {
       Serial.printf("tuned to preset 1/%d: %.2fMHz\n", g_presets.count(),
                     g_radio.freqMHz());
     }
+    snprintf(bl, sizeof(bl), "TUNE %.2f", g_radio.freqMHz());
+    g_oled.bootLog(bl, 1);
   } else {
     Serial.printf("RADIO FAIL: %s\n", g_radio.error());
     Serial.printf("  DEVICEID=0x%04X CHIPID=0x%04X\n", g_radio.deviceId(),
@@ -111,7 +131,11 @@ void setup() {
     Serial.println(F("  32.768kHz crystal on module, then send 'r' to retry."));
     g_led.blinkError();  // 慢闪=收音机故障
   }
+  g_oled.bootProgress(90);
   g_menu.begin(&g_led, &g_keys, &g_oled, &g_radio, &g_wifi, &g_presets);
+  g_oled.bootLog("SYSTEM READY", 1);
+  g_oled.bootProgress(100);
+  g_oled.bootFinish();
   // 开机自动搜台(无预存台时跑一次,见 menu.cpp bootScan)
   g_menu.bootScan();
   printHelp();

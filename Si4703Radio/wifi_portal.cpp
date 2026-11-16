@@ -77,7 +77,13 @@ void WifiPortal::onConnected() {
 }
 
 void WifiPortal::tick() {
-  if (_portalOn) s_server.handleClient();
+  uint32_t nowMs = millis();
+  // 网页服务 10ms 轮询一次即可;每轮 loop 都 handleClient 会在
+  // AP 有客户端时占用主循环,菜单按键显得不跟手。
+  if (_portalOn && nowMs - _lastServerMs >= 10) {
+    _lastServerMs = nowMs;
+    s_server.handleClient();
+  }
   // STA 状态机(非阻塞)
   bool nowConn = (WiFi.status() == WL_CONNECTED);
   if (nowConn && !_staConnected) {
@@ -89,7 +95,6 @@ void WifiPortal::tick() {
     Serial.println("[WIFI] disconnected");
   }
   // NTP 状态:每 2s 查一次,年 >= 2020 算有效
-  uint32_t nowMs = millis();
   if (_staConnected && nowMs - _lastNtpCheckMs >= 2000) {
     _lastNtpCheckMs = nowMs;
     struct tm t;

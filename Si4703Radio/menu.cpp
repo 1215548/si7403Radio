@@ -2,6 +2,7 @@
 #include "menu.h"
 #include "pins.h"
 #include "cn_font.h"
+#include <Preferences.h>
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
 #include <math.h>
@@ -9,10 +10,14 @@
 #include <string.h>
 
 static MenuUi* s_instance = nullptr;
+static Preferences s_uiPrefs;  // UI 偏好(字体等),NVS 命名空间 "ui"
 
 static const char* kMenuItems[] = {"WiFi配置", "收音机设置", "任务状态",
-                                   "日期时间", "关于版本", "返回首页"};
-#define MENU_COUNT 6
+                                   "日期时间", "关于版本", "字体切换",
+                                   "返回首页"};
+#define MENU_COUNT 7
+#define MENU_FONT_IDX 5
+#define MENU_HOME_IDX 6
 
 void MenuUi::begin(Led* led, Keys* keys, OledDisplay* oled, Si4703Radio* radio,
                    WifiPortal* wifi, Presets* presets) {
@@ -23,6 +28,9 @@ void MenuUi::begin(Led* led, Keys* keys, OledDisplay* oled, Si4703Radio* radio,
   _wifi = wifi;
   _presets = presets;
   s_instance = this;
+  // 恢复上次选择的字体(0=思源,1=等线)
+  s_uiPrefs.begin("ui", false);
+  CnFont_setFont(s_uiPrefs.getUChar("font", 0));
   _radioOk = _radio->ok();
   _state = UiState::HOME;
   _dirty = true;
@@ -87,15 +95,14 @@ int MenuUi::displayRssi() {
 
 void MenuUi::pollRadio() {
   uint32_t now = millis();
-  if (_radioOk && now - _lastRdsMs >= 50) {
+  // RDS 只在首页播放时显示;菜单/子页不需要,停掉可减少 20Hz 的
+  // 3-wire 借总线 + SPI.end()/begin()[菜单按键不跟手的主要来源]
+  if (_radioOk && _state == UiState::HOME && playing() &&
+      now - _lastRdsMs >= 50) {
     _lastRdsMs = now;
     if (_radio->pollRds()) {
       printRdsLine(_radio);
-      if (_state == UiState::HOME && playing()) {
-        _homeMidDirty = true;  // 台名/PS 只更新中行
-      } else {
-        _dirty = true;
-      }
+      _homeMidDirty = true;  // 台名/PS 只更新中行
     }
   }
   if (now - _lastStatusMs >= 1000) {
@@ -132,6 +139,13 @@ void MenuUi::tick() {
     Serial.printf("KEY %02X state=%d\n", pressed, (int)_state);
     _led->blink(120);
     handleKeys(pressed);
+  }
+  // 按键触发的页面切换先画,不能等后面的 RDS/WiFi 轮询(菜单不跟手)
+  if (_dirty) {
+    drawCurrent();
+    _dirty = false;
+    _homeFreqDirty = false;
+    _homeMidDirty = false;
   }
   pollRadio();
   pollWifi();
@@ -287,7 +301,14 @@ void MenuUi::menuKeys(uint8_t pressed) {
         break;
       case 3: _state = UiState::DATETIME; _dtTop = 0; break;
       case 4: _state = UiState::ABOUT; _abTop = 0; break;
-      case 5: backHome(); break;
+      case MENU_FONT_IDX: {  // 字体切换:思源 <-> 等线,立即重绘并保存
+        int nf = (CnFont_font() + 1) % 2;
+        CnFont_setFont(nf);
+        s_uiPrefs.putUChar("font", (uint8_t)nf);
+        Serial.printf("[UI] font=%s\n", CnFont_fontName());
+        break;
+      }
+      case MENU_HOME_IDX: backHome(); break;
     }
     _dirty = true;
   }
@@ -814,6 +835,13 @@ static void iconHome(OledDisplay* o, int x, int y, bool c) {
   o->rect(x + 4, y + 6, x + 6, y + 9, c);  // 门
 }
 
+static void iconFont(OledDisplay* o, int x, int y, bool c) {
+  // 大写 A:字体切换
+  o->line(x + 1, y + 9, x + 5, y + 1, c);
+  o->line(x + 5, y + 1, x + 9, y + 9, c);
+  o->line(x + 3, y + 6, x + 7, y + 6, c);
+}
+
 static void drawMenuIcon(int idx, OledDisplay* o, int x, int y, bool c) {
   switch (idx) {
     case 0: iconWifi(o, x, y, c); break;
@@ -821,6 +849,7 @@ static void drawMenuIcon(int idx, OledDisplay* o, int x, int y, bool c) {
     case 2: iconTasks(o, x, y, c); break;
     case 3: iconClock(o, x, y, c); break;
     case 4: iconInfo(o, x, y, c); break;
+    case MENU_FONT_IDX: iconFont(o, x, y, c); break;
     default: iconHome(o, x, y, c); break;
   }
 }
@@ -851,8 +880,14 @@ void MenuUi::drawMenu() {
     bool isSel = (idx == _menuSel);
     if (isSel) _oled->fillRect(0, y, 124, y + 12, true);
     drawMenuIcon(idx, _oled, 3, y + 1, !isSel);
+    const char* label = kMenuItems[idx];
+    char fontLabel[24];
+    if (idx == MENU_FONT_IDX) {
+      snprintf(fontLabel, sizeof(fontLabel), "字体: %s", CnFont_fontName());
+      label = fontLabel;
+    }
     char tmp[48];
-    CnFont_truncate12(kMenuItems[idx], 104, tmp, sizeof(tmp));
+    CnFont_truncate12(label, 104, tmp, sizeof(tmp));
     _oled->textMixed12(18, y, tmp, isSel);
   }
   drawScrollbar(_menuTop, 4, MENU_COUNT);
