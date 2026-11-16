@@ -106,31 +106,36 @@ static void OLED_InitReg(void)
     // 表现为同一行内容在多个纵向位置重复出现并每秒闪动(2026-11-16
     // 实机照片:信号条在 4 个位置重复)。全屏流写在两种模式下都对,
     // 所以旧版全屏刷新看不出问题,局部刷新一上就暴露。
+    // **关键:命令参数必须用 OLED_WriteData(DC=1)送。**
+    // v0.3.3~v0.3.6 的教训:参数用 OLED_WriteReg(DC=0)送会被当成
+    // 新命令,0x20 一直没真正设上页寻址,显示实际留在横向模式——
+    // 局部刷新数据写到屏顶(顶部一闪而过的一条线),底部柱子不动。
+    // 全屏流写在横向模式下也对,所以静态画面一直正常,只有局部
+    // 刷新暴露问题。以下所有双字节命令的参数一律改走 WriteData。
     OLED_WriteReg(0x20);
-    OLED_WriteReg(0x02);
-        
+    OLED_WriteData(0x02);
+
     OLED_WriteReg(0xFF);
-    
+
     OLED_WriteReg(0xA6);
-    
-    OLED_WriteReg(0xA8); 
-    OLED_WriteReg(0x3F);
-    
+
+    OLED_WriteReg(0xA8);
+    OLED_WriteData(0x3F);
+
     OLED_WriteReg(0xD3);
-    OLED_WriteReg(0x00);
-    
+    OLED_WriteData(0x00);
+
     OLED_WriteReg(0xD5);
-    OLED_WriteReg(0x80);
-    
+    OLED_WriteData(0x80);
+
     OLED_WriteReg(0xD9);
-    OLED_WriteReg(0x22);
+    OLED_WriteData(0x22);
 
     OLED_WriteReg(0xDA);
-    OLED_WriteReg(0x12);
-    
+    OLED_WriteData(0x12);
+
     OLED_WriteReg(0xDB);
-    OLED_WriteReg(0x40);
-    
+    OLED_WriteData(0x40);
 
 }
 
