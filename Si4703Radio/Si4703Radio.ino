@@ -12,6 +12,7 @@
 //   p 列预存台 / ? 帮助
 // 编译:见本目录 README.md(板子 ESP32C3 Dev Module,CDCOnBoot=cdc)。
 #include <Arduino.h>
+#include <WiFi.h>
 #include "pins.h"
 #include "led.h"
 #include "keys.h"
@@ -55,6 +56,8 @@ static void printHelp() {
   Serial.println(F("v 12    volume 0-15   m mute toggle"));
   Serial.println(F("i       dump regs 00h-0Fh + RDS   t OLED test pattern"));
   Serial.println(F("r       re-init radio   p list presets   ? this help"));
+  Serial.println(F("w       toggle WiFi config AP (Si4703Radio / 192.168.4.1)"));
+  Serial.println(F("n       scan WiFi networks (temporarily turns AP off)"));
   Serial.println(F("keys HOME: K5 menu  K4/K3 ch  K2/K1 vol"));
   Serial.println(F("keys MENU: K3 up K4 down K5 enter K1 back"));
   Serial.println(F("RDS auto: PS/RT/CT on screen + serial when station sends RDS"));
@@ -176,8 +179,10 @@ static void handleSerial() {
                   g_radio.volume(), (int)g_radio.isMuted());
     Serial.printf("presets: %d (current %d)\n", g_presets.count(),
                   g_presets.current() + 1);
-    Serial.printf("wifi: %s %s\n", g_wifi.connected() ? "connected" : "off",
-                  g_wifi.ssid().c_str());
+    Serial.printf("wifi: %s ssid=%s ip=%s portal=%s\n",
+                  g_wifi.connected() ? "connected" : "off",
+                  g_wifi.ssid().c_str(), g_wifi.ip().c_str(),
+                  g_wifi.portalOn() ? "ON" : "OFF");
     printRds();
   } else if (cmd == 't') {
     g_oled.showTestPattern();
@@ -200,6 +205,28 @@ static void handleSerial() {
       g_menu.showMsg("RADIO FAIL");
       g_led.blinkError();
     }
+  } else if (cmd == 'w') {
+    g_wifi.setPortal(!g_wifi.portalOn());
+    Serial.printf("PORTAL %s apIP=%s apSSID=%s apMAC=%s mode=%d tx=%d\n",
+                  g_wifi.portalOn() ? "ON" : "OFF", g_wifi.apIP().c_str(),
+                  WiFi.softAPSSID().c_str(),
+                  WiFi.softAPmacAddress().c_str(), (int)WiFi.getMode(),
+                  (int)WiFi.getTxPower());
+    g_menu.refresh();
+  } else if (cmd == 'n') {
+    // 诊断:先关 AP,再用 STA 扫一圈,最后恢复原 AP 状态
+    bool wasOn = g_wifi.portalOn();
+    if (wasOn) g_wifi.setPortal(false);
+    WiFi.mode(WIFI_STA);
+    int n = WiFi.scanNetworks(false);
+    Serial.printf("WIFI scan: %d networks\n", n);
+    for (int i = 0; i < n; i++) {
+      Serial.printf("  %d: \"%s\" rssi=%d ch=%d\n", i + 1,
+                    WiFi.SSID(i).c_str(), WiFi.RSSI(i), WiFi.channel(i));
+    }
+    WiFi.scanDelete();
+    if (wasOn) g_wifi.setPortal(true);
+    g_menu.refresh();
   } else if (cmd == 'p') {
     Serial.printf("presets: %d\n", g_presets.count());
     for (int i = 0; i < g_presets.count(); i++) {

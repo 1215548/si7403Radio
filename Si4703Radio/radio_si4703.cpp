@@ -1,5 +1,6 @@
 // radio_si4703.cpp -- 见 radio_si4703.h
 #include "radio_si4703.h"
+#include "DEV_Config.h"
 #include <SPI.h>
 
 // 3-wire 控制字(手册 §4.8.1):9 位,顺序 A7 A6 A5 R/W A4 A3 A2 A1 A0,
@@ -28,6 +29,8 @@ void Si4703Radio::busRelease() {
   pinMode(PIN_SI4703_SDIO, OUTPUT);
   digitalWrite(PIN_SI4703_SDIO, LOW);
   SPI.begin(PIN_OLED_SCLK, -1, PIN_OLED_MOSI, PIN_OLED_CS);
+  // 分时复用:OLED CS 仍为高,空转一字节吸收 SPI 重挂后的首字节
+  SPI4W_Prime();
 }
 
 // ---------- 3-wire 底层 ----------

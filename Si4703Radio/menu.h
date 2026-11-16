@@ -73,6 +73,15 @@ private:
   void drawHomePlaying();
   void drawHomeClock();
   void drawHomeReserved();
+  // 首页播放态:顶部状态行两套布局 + 频率区,支持局部刷新
+  void renderStatusLine(char* buf, size_t n);
+  void drawStatusLine();
+  void drawFreqArea();
+  void renderMidLine(char* buf, size_t n);
+  void drawMidArea();
+  void refreshHomeTop(bool force);
+  void refreshHomeFreq();
+  void refreshHomeMid();
   void drawMenu();
   void drawWifi();
   void drawRadioSet();
@@ -112,6 +121,13 @@ private:
   // 瞬时消息
   char _msg[48] = "";
   uint32_t _msgUntil = 0;
+  // 首页顶部状态行:5 秒无按键显示日期/秒/星期,按键后显示音量/频道
+  char _topLine[48] = "";
+  char _midLine[48] = "";
+  uint32_t _lastKeyMs = 0;
+  uint32_t _lastTopMs = 0;
+  bool _homeFreqDirty = false;
+  bool _homeMidDirty = false;
   // 搜台进度
   int _scanFound = 0;
   float _scanFreq = 0;

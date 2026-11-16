@@ -22,6 +22,9 @@ public:
   // UTF-8 混排:中文 16 点阵 + ASCII Font16;invert=true 为反白
   void textMixed(int x, int y, const char* utf8, bool invert = false);
   int mixedWidth(const char* utf8);
+  // 12px 紧凑混排:汉字 12x12(16 点阵降采样)+ ASCII Font8
+  void textMixed12(int x, int y, const char* utf8, bool invert = false);
+  int mixedWidth12(const char* utf8);
   // ASCII 字符串(Font12,居中在 16px 行内,常用于 SSID/IP 行)
   void textEN12(int x, int y, const char* s, bool invert = false);
   void hline(int x0, int x1, int y);

@@ -213,6 +213,9 @@ function:	Refresh selected GDDRAM pages only
 note: page0..page1 是物理页号。先显式设页寻址(datasheet 表 9-3:
   命令参数均 DC=0),再逐页定页+列地址后突发写,与全屏逐页写法
   完全一致。底部逻辑页 6/7 => 物理页 1/0,见 OledDisplay::refreshRows。
+  按 page1 -> page0 倒序写:最后写物理页 0(屏幕最底 8px),并把
+  指针留在页 0。这样即使紧跟着的全屏刷新第一页命令被吞,数据也会
+  落到页 0 而不是别处(实机切页底部残影的防御,见 oled_display flush)。
 ********************************************************************************/
 void OLED_2IN42_RefreshPages(const UBYTE *Image, UBYTE page0, UBYTE page1)
 {
@@ -220,8 +223,8 @@ void OLED_2IN42_RefreshPages(const UBYTE *Image, UBYTE page0, UBYTE page1)
     if (page0 > page1 || page1 > 7) return;
     OLED_WriteReg(0x20);
     OLED_WriteReg(0x02);
-    for (UWORD page=page0; page<=page1; page++) {
-        OLED_SetPageAddress(page);
+    for (int page=(int)page1; page>=(int)page0; page--) {
+        OLED_SetPageAddress((UWORD)page);
         for (UWORD column=0; column<128; column++) {
             pageBuf[column] = Image[(7-page) + column*8];
         }

@@ -66,6 +66,15 @@ void SPI4W_Write_Buffer(const uint8_t* data, size_t len) {
   SPI.endTransaction();
 }
 
+void SPI4W_Prime(void) {
+  // 调用方保证 OLED CS 为高(收音机借走总线时 CS 一直高),空转
+  // 一个字节不会写进屏,只用来让刚重新挂上的 SPI 外设稳定下来。
+  delayMicroseconds(5);
+  SPI.beginTransaction(SPISettings(OLED_SPI_CLOCK_HZ, MSBFIRST, SPI_MODE3));
+  SPI.transfer(0x00);
+  SPI.endTransaction();
+}
+
 void I2C_Write_Byte(uint8_t value, uint8_t Cmd)
 {
   uint8_t Addr = 0x3c;

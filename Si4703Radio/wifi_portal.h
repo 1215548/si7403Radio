@@ -33,10 +33,6 @@ public:
   String lunarFull() const;   // "丙午马年十月初八"
   String lunarShort() const;  // "十月初八"
   String lunarMonthDay() const;  // "十月初八"(同 lunarShort)
-  // 供菜单页显示的扫描结果(开网页服务时扫一次并缓存)
-  int scanCount() const { return _scanCount; }
-  String scanSSID(int i) const;
-
 private:
   void onConnected();      // 刚连上:启动 NTP + 请求农历
   void requestLunar();     // 通知农历任务拉取(60s 节流)
@@ -55,8 +51,6 @@ private:
   String _lunarFull;    // "丙午马年十月初八"
   String _lunarShort;   // "十月初八"
   String _ssidCache;    // 当前连接的 SSID(连接中为空)
-  String _scanSSIDs[16];
-  int _scanCount = 0;
   uint32_t _lastNtpCheckMs = 0;
   uint32_t _lastLunarTryMs = 0;
   // 农历任务

@@ -59,6 +59,9 @@ void SPI4W_Write_Byte(uint8_t DATA);
 // 比逐字节开事务快一个量级;单线程、收音机只在两次 OLED 调用之间
 // 借走总线,所以一页 128 字节内连续发是安全的。
 void SPI4W_Write_Buffer(const uint8_t* data, size_t len);
+// SPI 重新挂回后空转一个字节(OLED CS 必须为高):避开刚 SPI.begin()
+// 时首字节可能丢时钟/被吞,防止下一次 OLED 命令错位。
+void SPI4W_Prime(void);
 void I2C_Write_Byte(uint8_t value, uint8_t Cmd);
 
 void Driver_Delay_ms(unsigned long xms);

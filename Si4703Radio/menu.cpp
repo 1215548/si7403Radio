@@ -40,7 +40,11 @@ bool MenuUi::playing() const {
 void MenuUi::showMsg(const char* msg) {
   snprintf(_msg, sizeof(_msg), "%s", msg);
   _msgUntil = millis() + 2000;
-  _dirty = true;
+  if (_state == UiState::HOME && playing()) {
+    _homeMidDirty = true;  // 首页播放态只刷中行,不整屏重画
+  } else {
+    _dirty = true;
+  }
 }
 
 void MenuUi::manualTune(float freq) {
@@ -49,6 +53,7 @@ void MenuUi::manualTune(float freq) {
     _presets->setCurrent(-1);  // 手动调频后不再是预存台
     char buf[24];
     snprintf(buf, sizeof(buf), "TUNE %.2fMHz", _radio->freqMHz());
+    if (_state == UiState::HOME && playing()) _homeFreqDirty = true;
     showMsg(buf);
   }
 }
@@ -86,7 +91,11 @@ void MenuUi::pollRadio() {
     _lastRdsMs = now;
     if (_radio->pollRds()) {
       printRdsLine(_radio);
-      _dirty = true;
+      if (_state == UiState::HOME && playing()) {
+        _homeMidDirty = true;  // 台名/PS 只更新中行
+      } else {
+        _dirty = true;
+      }
     }
   }
   if (now - _lastStatusMs >= 1000) {
@@ -98,7 +107,9 @@ void MenuUi::pollRadio() {
     } else {
       _led->blinkError();
     }
-    _dirty = true;  // 每秒刷新(RSSI/时钟秒数)
+    // 首页播放态:顶部行/底部频谱各自局部刷新,不能每秒整屏重画
+    // (否则带秒的时钟会每秒全屏刷一次)。其他页面仍每秒重画。
+    if (!(_state == UiState::HOME && playing())) _dirty = true;
   }
   // (旧:RadioText 超长时滚动,每 600ms 刷一帧——底部已改频谱,不再滚动 RT)
 }
@@ -116,6 +127,9 @@ void MenuUi::tick() {
   _led->update();
   uint8_t pressed = _keys->update();
   if (pressed) {
+    _lastKeyMs = millis();  // 5 秒内按键 -> 顶部状态行切到按键布局
+    _lastTopMs = 0;         // 不等节流,下一轮立即刷新顶部
+    Serial.printf("KEY %02X state=%d\n", pressed, (int)_state);
     _led->blink(120);
     handleKeys(pressed);
   }
@@ -125,7 +139,11 @@ void MenuUi::tick() {
   // 瞬时消息过期后清掉并重画中行(恢复显示台名),避免消息残留
   if (_msg[0] && millis() >= _msgUntil) {
     _msg[0] = '\0';
-    _dirty = true;
+    if (_state == UiState::HOME && playing()) {
+      _homeMidDirty = true;
+    } else {
+      _dirty = true;
+    }
   }
   if (_state == UiState::TASKS &&
       (uint32_t)(millis() - _lastTaskSnapMs) >= 2000) {
@@ -135,6 +153,26 @@ void MenuUi::tick() {
   if (_dirty) {
     drawCurrent();
     _dirty = false;
+    _homeFreqDirty = false;
+    _homeMidDirty = false;
+  }
+  // 首页播放态:顶部行/频率区/中行全部局部刷新,不整屏重画
+  if (_state == UiState::HOME && playing()) {
+    if (_homeFreqDirty) {
+      refreshHomeFreq();
+      _homeFreqDirty = false;
+    }
+    if (_homeMidDirty) {
+      refreshHomeMid();
+      _homeMidDirty = false;
+    }
+    if ((uint32_t)(millis() - _lastTopMs) >= 200) {
+      _lastTopMs = millis();
+      refreshHomeTop(false);
+    }
+  } else {
+    _homeFreqDirty = false;
+    _homeMidDirty = false;
   }
 }
 
@@ -177,44 +215,40 @@ void MenuUi::homeKeys(uint8_t pressed) {
     return;
   }
   if (playing()) {
-    char buf[32];
+    // 顶部状态行会显示 音量/频道,不再用中行瞬时消息(避免整屏重画)
     if (pressed & KEY4_MASK) {
       if (_presets->count() > 0) {
         _presets->next(*_radio);
-        snprintf(buf, sizeof(buf), "CH %d/%d %.2f", _presets->current() + 1,
-                 _presets->count(), _radio->freqMHz());
       } else {
         float f = _radio->freqMHz() + RADIO_SPACE_MHZ;
         if (f > RADIO_BAND_HIGH_MHZ) f = RADIO_BAND_HIGH_MHZ;
         _radio->tune(f);
-        snprintf(buf, sizeof(buf), "%.2fMHz", _radio->freqMHz());
       }
-      showMsg(buf);
+      _homeFreqDirty = true;  // 频率区局部刷新
+      _homeMidDirty = true;   // 换台后旧 PS 立即清掉
+      _lastTopMs = 0;
     }
     if (pressed & KEY3_MASK) {
       if (_presets->count() > 0) {
         _presets->prev(*_radio);
-        snprintf(buf, sizeof(buf), "CH %d/%d %.2f", _presets->current() + 1,
-                 _presets->count(), _radio->freqMHz());
       } else {
         float f = _radio->freqMHz() - RADIO_SPACE_MHZ;
         if (f < RADIO_BAND_LOW_MHZ) f = RADIO_BAND_LOW_MHZ;
         _radio->tune(f);
-        snprintf(buf, sizeof(buf), "%.2fMHz", _radio->freqMHz());
       }
-      showMsg(buf);
+      _homeFreqDirty = true;
+      _homeMidDirty = true;
+      _lastTopMs = 0;
     }
     if (pressed & KEY2_MASK) {
       uint8_t v = _radio->volume();
       if (v < 15) _radio->setVolume(v + 1);
-      snprintf(buf, sizeof(buf), "VOL %d", _radio->volume());
-      showMsg(buf);
+      _lastTopMs = 0;
     }
     if (pressed & KEY1_MASK) {
       uint8_t v = _radio->volume();
       if (v > 0) _radio->setVolume(v - 1);
-      snprintf(buf, sizeof(buf), "VOL %d", _radio->volume());
-      showMsg(buf);
+      _lastTopMs = 0;
     }
   } else if (_wifi->timeValid()) {
     // 不播放且时间有效:KEY4/KEY3 切换时钟显示风格
@@ -229,14 +263,14 @@ void MenuUi::homeKeys(uint8_t pressed) {
 void MenuUi::menuKeys(uint8_t pressed) {
   if (pressed & KEY3_MASK) {
     _menuSel = (_menuSel - 1 + MENU_COUNT) % MENU_COUNT;
-    // 首尾循环时选中项可能跳到窗口外,两个方向都要把可见窗口拉回来
+    // 一屏 4 项;首尾循环时选中项可能跳到窗口外,两个方向都拉回来
     if (_menuSel < _menuTop) _menuTop = _menuSel;
-    if (_menuSel > _menuTop + 2) _menuTop = _menuSel - 2;
+    if (_menuSel > _menuTop + 3) _menuTop = _menuSel - 3;
     _dirty = true;
   }
   if (pressed & KEY4_MASK) {
     _menuSel = (_menuSel + 1) % MENU_COUNT;
-    if (_menuSel > _menuTop + 2) _menuTop = _menuSel - 2;
+    if (_menuSel > _menuTop + 3) _menuTop = _menuSel - 3;
     if (_menuSel < _menuTop) _menuTop = _menuSel;
     _dirty = true;
   }
@@ -264,7 +298,7 @@ void MenuUi::wifiKeys(uint8_t pressed) {
     _wifiTop--;
     _dirty = true;
   }
-  if (pressed & KEY4_MASK && _wifiTop < 3) {
+  if (pressed & KEY4_MASK && _wifiTop < 2) {  // 6 行,一屏 4 行
     _wifiTop++;
     _dirty = true;
   }
@@ -283,12 +317,12 @@ void MenuUi::radioSetKeys(uint8_t pressed) {
   if (pressed & KEY3_MASK) {
     _rsSel = (_rsSel - 1 + kCount) % kCount;
     if (_rsSel < _rsTop) _rsTop = _rsSel;
-    if (_rsSel > _rsTop + 2) _rsTop = _rsSel - 2;
+    if (_rsSel > _rsTop + 3) _rsTop = _rsSel - 3;
     _dirty = true;
   }
   if (pressed & KEY4_MASK) {
     _rsSel = (_rsSel + 1) % kCount;
-    if (_rsSel > _rsTop + 2) _rsTop = _rsSel - 2;
+    if (_rsSel > _rsTop + 3) _rsTop = _rsSel - 3;
     if (_rsSel < _rsTop) _rsTop = _rsSel;
     _dirty = true;
   }
@@ -320,7 +354,7 @@ void MenuUi::pageKeys(uint8_t pressed, int& top, int lineCount) {
     top--;
     _dirty = true;
   }
-  if (pressed & KEY4_MASK && top + 3 < lineCount) {
+  if (pressed & KEY4_MASK && top + 4 < lineCount) {
     top++;
     _dirty = true;
   }
@@ -486,7 +520,7 @@ void MenuUi::drawCurrent() {
 
 void MenuUi::drawTitle(const char* zh, const char* rightEn) {
   _oled->fillRect(0, 0, 127, 15, true);
-  _oled->textMixed(2, 0, zh, true);
+  _oled->textMixed12(2, 2, zh, true);  // 12px 标题在 16px 栏内居中
   if (rightEn && rightEn[0]) {
     int w = (int)strlen(rightEn) * 5;  // Font8 宽 5px
     _oled->textEN(126 - w, 4, rightEn, &Font8, true);
@@ -497,25 +531,26 @@ void MenuUi::drawList(const char* title, const char* items[], int count,
                       int sel, int top, const char* rightEn) {
   _oled->prepare();
   drawTitle(title, rightEn);
-  for (int i = 0; i < 3; i++) {
+  // 12px 行 x4:y=16..63,一屏比原来多显示一项
+  for (int i = 0; i < 4; i++) {
     int idx = top + i;
     if (idx >= count) break;
-    int y = 16 + i * 16;
+    int y = 16 + i * 12;
     bool isSel = (idx == sel);
     // 选中行反白到 x=124,右侧留 2px 给滚动条,避免滚动条被反白吞掉
-    if (isSel) _oled->fillRect(0, y, 124, y + 15, true);
+    if (isSel) _oled->fillRect(0, y, 124, y + 12, true);
     char tmp[48];
-    CnFont_truncate(items[idx], 116, tmp, sizeof(tmp));
-    _oled->textMixed(2, y, tmp, isSel);
+    CnFont_truncate12(items[idx], 116, tmp, sizeof(tmp));
+    _oled->textMixed12(3, y, tmp, isSel);
   }
-  drawScrollbar(top, 3, count);
+  drawScrollbar(top, 4, count);
   _oled->flush();
 }
 
 void MenuUi::drawScrollbar(int top, int visible, int count) {
   if (count <= visible) return;
   const int x0 = 126, x1 = 127;
-  const int y0 = 17, y1 = 62;
+  const int y0 = 16, y1 = 63;
   int track = y1 - y0 + 1;
   int thumb = track * visible / count;
   if (thumb < 6) thumb = 6;
@@ -536,42 +571,111 @@ void MenuUi::drawHome() {
   }
 }
 
-void MenuUi::drawHomePlaying() {
-  char buf[48];
-  _oled->prepare();
-  // 顶行(状态放顶部,Font8):RSSI + 立体声/音量/台序号 + 时间
-  // (用户要求 RSSI/ST/VOL 放顶部;台名改到 y=42 中行)
+// ---------- 首页播放态顶部行 ----------
+// 空闲(5 秒无按键):RSSI + 日期 + 带秒时间 + 英文星期
+// 刚按键:        RSSI + ST/MO + 音量 + 频道序号/总数 + 不带秒时间
+// 宽度按 Font8 5px/字符算,最长 25 字符(125px),x=1 起刚好放下。
+void MenuUi::renderStatusLine(char* buf, size_t n) {
+  static const char* kWeekShort[] = {"Sun", "Mon", "Tue", "Wed",
+                                     "Thu", "Fri", "Sat"};
   int rssi = displayRssi();
-  if (_presets->count() > 0) {
-    snprintf(buf, sizeof(buf), "RSSI %d %s V%d %d/%d", rssi,
-             _radio->isStereo() ? "ST" : "MO", _radio->volume(),
-             _presets->current() + 1, _presets->count());
-  } else {
-    snprintf(buf, sizeof(buf), "RSSI %d %s V%d", rssi,
-             _radio->isStereo() ? "ST" : "MO", _radio->volume());
-  }
-  _oled->textEN(2, 2, buf, &Font8);  // Font8 居中于 12px 顶行(y=2..9)
+  if (rssi < 0) rssi = 0;
+  if (rssi > 99) rssi = 99;  // 保证行宽不超屏
   struct tm t;
-  if (_wifi->getTime(t)) {
-    snprintf(buf, sizeof(buf), "%02d:%02d", t.tm_hour, t.tm_min);
-    int w = (int)strlen(buf) * 5;  // Font8 宽 5px
-    _oled->textEN(126 - w, 2, buf, &Font8);
+  bool hasTime = _wifi->getTime(t);
+  bool active = (uint32_t)(millis() - _lastKeyMs) < 5000;
+  if (!active) {
+    if (hasTime) {
+      snprintf(buf, n, "RSSI%2d %02d/%02d %02d:%02d:%02d %s", rssi,
+               t.tm_mon + 1, t.tm_mday, t.tm_hour, t.tm_min, t.tm_sec,
+               kWeekShort[t.tm_wday % 7]);
+    } else {
+      snprintf(buf, n, "RSSI%2d NO TIME", rssi);
+    }
+    return;
   }
-  _oled->hline(0, 127, 14);
-  // 大频率
+  char ch[12] = "";
+  if (_presets->count() > 0 && _presets->current() >= 0) {
+    snprintf(ch, sizeof(ch), " %d/%d", _presets->current() + 1,
+             _presets->count());
+  }
+  if (hasTime) {
+    snprintf(buf, n, "RSSI%2d %s V%d%s %02d:%02d", rssi,
+             _radio->isStereo() ? "ST" : "MO", _radio->volume(), ch,
+             t.tm_hour, t.tm_min);
+  } else {
+    snprintf(buf, n, "RSSI%2d %s V%d%s", rssi,
+             _radio->isStereo() ? "ST" : "MO", _radio->volume(), ch);
+  }
+}
+
+void MenuUi::drawStatusLine() {
+  char line[48];
+  renderStatusLine(line, sizeof(line));
+  snprintf(_topLine, sizeof(_topLine), "%s", line);
+  _oled->textEN(1, 2, line, &Font8);
+}
+
+void MenuUi::drawFreqArea() {
+  char buf[16];
   snprintf(buf, sizeof(buf), "%.2f", _radio->freqMHz());
   _oled->textEN(2, 16, buf, &Font24);
   _oled->textEN(2 + (int)strlen(buf) * 17 + 2, 28, "MHz", &Font12);
-  // 中行:瞬时消息(如 CH/VOL/FOUND)优先,否则显示台名
-  uint32_t now = millis();
-  if (now < _msgUntil && _msg[0]) {
-    _oled->textEN(2, 42, _msg, &Font8);
+}
+
+void MenuUi::refreshHomeTop(bool force) {
+  if (_state != UiState::HOME || !playing()) return;
+  char line[48];
+  renderStatusLine(line, sizeof(line));
+  if (!force && strcmp(line, _topLine) == 0) return;
+  snprintf(_topLine, sizeof(_topLine), "%s", line);
+  _oled->clearRegion(0, 0, 127, 16);  // 逻辑 y=0..15
+  _oled->textEN(1, 2, line, &Font8);
+  _oled->hline(0, 127, 14);
+  _oled->refreshRows(0, 15);  // 只发物理页 7/6,不碰下半屏
+}
+
+void MenuUi::refreshHomeFreq() {
+  if (_state != UiState::HOME || !playing()) return;
+  _oled->clearRegion(0, 16, 127, 40);  // 清 y=16..39
+  drawFreqArea();
+  _oled->refreshRows(16, 39);  // 只发物理页 5/4/3
+}
+
+void MenuUi::renderMidLine(char* buf, size_t n) {
+  if (millis() < _msgUntil && _msg[0]) {
+    snprintf(buf, n, "%s", _msg);
   } else {
     const RdsInfo& r = _radio->rds();
-    _oled->textEN(2, 42, r.psComplete ? r.ps : "FM", &Font8);
+    snprintf(buf, n, "%s", r.psComplete ? r.ps : "FM");
   }
-  // 底部(y=52..63):频谱律动,全屏重画时也画上,避免每秒状态刷新
-  // 把底部清空一帧;平移动画由 tickSpectrum 只局部刷新这两页。
+}
+
+void MenuUi::drawMidArea() {
+  char line[48];
+  renderMidLine(line, sizeof(line));
+  snprintf(_midLine, sizeof(_midLine), "%s", line);
+  _oled->textEN(2, 42, line, &Font8);
+}
+
+void MenuUi::refreshHomeMid() {
+  if (_state != UiState::HOME || !playing()) return;
+  char line[48];
+  renderMidLine(line, sizeof(line));
+  if (strcmp(line, _midLine) == 0) return;
+  snprintf(_midLine, sizeof(_midLine), "%s", line);
+  _oled->clearRegion(0, 40, 127, 52);  // 清 y=40..51
+  _oled->textEN(2, 42, line, &Font8);
+  _oled->refreshRows(40, 51);  // 物理页 2/1(含频谱顶部,画布已同步)
+}
+
+void MenuUi::drawHomePlaying() {
+  _oled->prepare();
+  drawStatusLine();
+  _oled->hline(0, 127, 14);
+  drawFreqArea();
+  drawMidArea();
+  // 底部(y=52..63):频谱律动,全屏重画时也画上,避免切页把底部清空
   drawSpectrum();
   _oled->flush();
 }
@@ -663,13 +767,13 @@ void MenuUi::drawHomeReserved() {
   _oled->flush();
 }
 
-// ---------- 主菜单图标(14x14,x=3,y=行顶+1) ----------
+// ---------- 主菜单图标(10x10,x=3,y=行顶+1) ----------
 static void iconWifi(OledDisplay* o, int x, int y, bool c) {
   const float kPi = 3.14159265f;
-  int cx = x + 7, cy = y + 11;
-  o->fillRect(cx - 1, cy - 1, cx + 1, cy, c);  // 圆点
-  for (int r = 4; r <= 8; r += 4) {            // 两道弧
-    for (int deg = 215; deg <= 325; deg += 6) {
+  int cx = x + 5, cy = y + 8;
+  o->fillRect(cx - 1, cy - 1, cx, cy, c);  // 2x2 圆点
+  for (int r = 3; r <= 6; r += 3) {        // 两道弧
+    for (int deg = 215; deg <= 325; deg += 8) {
       float a = (float)deg * kPi / 180.0f;
       o->pixel(cx + (int)lroundf(r * cosf(a)),
                cy + (int)lroundf(r * sinf(a)), c);
@@ -678,36 +782,36 @@ static void iconWifi(OledDisplay* o, int x, int y, bool c) {
 }
 
 static void iconRadio(OledDisplay* o, int x, int y, bool c) {
-  o->line(x + 2, y + 10, x + 9, y + 2, c);       // 天线
-  o->fillRect(x + 8, y + 2, x + 10, y + 3, c);   // 天线头
-  o->rect(x + 1, y + 6, x + 11, y + 11, c);      // 机身
-  o->fillRect(x + 3, y + 8, x + 4, y + 9, c);    // 旋钮
-  o->fillRect(x + 7, y + 8, x + 10, y + 9, c);   // 喇叭格栅
+  o->line(x + 1, y + 7, x + 7, y + 1, c);      // 天线
+  o->fillRect(x + 7, y + 1, x + 8, y + 2, c);  // 天线头
+  o->rect(x + 1, y + 4, x + 8, y + 8, c);      // 机身
+  o->fillRect(x + 2, y + 6, x + 3, y + 6, c);  // 旋钮
+  o->fillRect(x + 5, y + 6, x + 7, y + 7, c);  // 喇叭格栅
 }
 
 static void iconTasks(OledDisplay* o, int x, int y, bool c) {
-  o->fillRect(x + 1, y + 3, x + 11, y + 4, c);
-  o->fillRect(x + 1, y + 6, x + 8, y + 7, c);
-  o->fillRect(x + 1, y + 9, x + 10, y + 10, c);
+  o->fillRect(x + 1, y + 1, x + 8, y + 2, c);
+  o->fillRect(x + 1, y + 4, x + 6, y + 5, c);
+  o->fillRect(x + 1, y + 7, x + 7, y + 8, c);
 }
 
 static void iconClock(OledDisplay* o, int x, int y, bool c) {
-  o->circle(x + 7, y + 7, 5, false, c);
-  o->line(x + 7, y + 7, x + 7, y + 4, c);
-  o->line(x + 7, y + 7, x + 9, y + 8, c);
+  o->circle(x + 5, y + 5, 4, false, c);
+  o->line(x + 5, y + 5, x + 5, y + 3, c);
+  o->line(x + 5, y + 5, x + 6, y + 6, c);
 }
 
 static void iconInfo(OledDisplay* o, int x, int y, bool c) {
-  o->circle(x + 7, y + 7, 5, false, c);
-  o->pixel(x + 7, y + 4, c);
-  o->line(x + 7, y + 6, x + 7, y + 10, c);
+  o->circle(x + 5, y + 5, 4, false, c);
+  o->pixel(x + 5, y + 3, c);
+  o->line(x + 5, y + 4, x + 5, y + 7, c);
 }
 
 static void iconHome(OledDisplay* o, int x, int y, bool c) {
-  o->line(x + 1, y + 7, x + 7, y + 1, c);
-  o->line(x + 7, y + 1, x + 13, y + 7, c);
-  o->rect(x + 2, y + 7, x + 12, y + 12, c);
-  o->rect(x + 5, y + 9, x + 7, y + 12, c);  // 门
+  o->line(x + 1, y + 5, x + 5, y + 1, c);
+  o->line(x + 5, y + 1, x + 9, y + 5, c);
+  o->rect(x + 2, y + 5, x + 8, y + 9, c);
+  o->rect(x + 4, y + 6, x + 6, y + 9, c);  // 门
 }
 
 static void drawMenuIcon(int idx, OledDisplay* o, int x, int y, bool c) {
@@ -740,71 +844,56 @@ void MenuUi::drawMenu() {
   }
   _oled->prepare();
   drawTitle("菜单", rightEn);
-  for (int i = 0; i < 3; i++) {
+  for (int i = 0; i < 4; i++) {
     int idx = _menuTop + i;
     if (idx >= MENU_COUNT) break;
-    int y = 16 + i * 16;
+    int y = 16 + i * 12;
     bool isSel = (idx == _menuSel);
-    if (isSel) _oled->fillRect(0, y, 124, y + 15, true);
-    drawMenuIcon(idx, _oled, 3, y + 2, !isSel);
+    if (isSel) _oled->fillRect(0, y, 124, y + 12, true);
+    drawMenuIcon(idx, _oled, 3, y + 1, !isSel);
     char tmp[48];
-    CnFont_truncate(kMenuItems[idx], 98, tmp, sizeof(tmp));
-    _oled->textMixed(22, y, tmp, isSel);
+    CnFont_truncate12(kMenuItems[idx], 104, tmp, sizeof(tmp));
+    _oled->textMixed12(18, y, tmp, isSel);
   }
-  drawScrollbar(_menuTop, 3, MENU_COUNT);
+  drawScrollbar(_menuTop, 4, MENU_COUNT);
   _oled->flush();
 }
 
 void MenuUi::drawWifi() {
-  struct WiLine {
-    char text[40];
-    bool ascii12;
-  };
-  WiLine lines[6];
+  // KEY5 只负责开关网页配置服务;已连上路由器时,前 4 行固定显示
+  // 状态/当前 WiFi 名/IP/信号,往下滚才看到网页服务和 AP 信息。
+  char lines[6][64];
   int n = 0;
-  snprintf(lines[n].text, sizeof(lines[n].text), "状态: %s",
-           _wifi->connected() ? "已连接" : "未连接");
-  lines[n++].ascii12 = false;
-  {
-    char ssid[16];
-    snprintf(ssid, sizeof(ssid), "%.12s", _wifi->ssid().c_str());
-    snprintf(lines[n].text, sizeof(lines[n].text), "SSID: %s", ssid);
-    lines[n++].ascii12 = true;
-  }
-  snprintf(lines[n].text, sizeof(lines[n].text), "IP: %s",
-           _wifi->ip().c_str());
-  lines[n++].ascii12 = true;
-  if (_wifi->connected()) {
-    snprintf(lines[n].text, sizeof(lines[n].text), "信号: %ddBm",
-             _wifi->rssi());
+  bool conn = _wifi->connected();
+  snprintf(lines[n++], sizeof(lines[0]), "状态: %s",
+           conn ? "已连接" : "未连接");
+  String ssid = _wifi->ssid();
+  if (ssid.length() == 0) ssid = "未配置";
+  snprintf(lines[n++], sizeof(lines[0]), "WiFi: %s", ssid.c_str());
+  snprintf(lines[n++], sizeof(lines[0]), "IP: %s", _wifi->ip().c_str());
+  if (conn) {
+    snprintf(lines[n++], sizeof(lines[0]), "信号: %ddBm", _wifi->rssi());
   } else {
-    snprintf(lines[n].text, sizeof(lines[n].text), "信号: -");
+    snprintf(lines[n++], sizeof(lines[0]), "信号: -");
   }
-  lines[n++].ascii12 = false;
-  snprintf(lines[n].text, sizeof(lines[n].text), "网页: %s",
+  snprintf(lines[n++], sizeof(lines[0]), "网页: %s",
            _wifi->portalOn() ? "已开启" : "已关闭");
-  lines[n++].ascii12 = false;
   if (_wifi->portalOn()) {
-    snprintf(lines[n].text, sizeof(lines[n].text), "AP 192.168.4.1");
-    lines[n++].ascii12 = true;
+    snprintf(lines[n++], sizeof(lines[0]), "AP: 192.168.4.1");
   } else {
-    snprintf(lines[n].text, sizeof(lines[n].text), "按KEY5开启");
-    lines[n++].ascii12 = false;
+    snprintf(lines[n++], sizeof(lines[0]), "按KEY5开启网页");
   }
   _oled->prepare();
   drawTitle("WiFi配置", _wifi->portalOn() ? "AP ON" : "AP OFF");
-  for (int i = 0; i < 3; i++) {
+  for (int i = 0; i < 4; i++) {
     int idx = _wifiTop + i;
     if (idx >= n) break;
-    int y = 16 + i * 16;
-    if (lines[idx].ascii12) {
-      _oled->textEN12(2, y + 2, lines[idx].text);
-    } else {
-      _oled->textMixed(2, y, lines[idx].text);
-    }
+    int y = 16 + i * 12;
+    char tmp[64];
+    CnFont_truncate12(lines[idx], 118, tmp, sizeof(tmp));
+    _oled->textMixed12(3, y, tmp);
   }
-  if (_wifiTop > 0) _oled->textEN(120, 18, "^", &Font8);
-  if (_wifiTop + 3 < n) _oled->textEN(120, 50, "v", &Font8);
+  drawScrollbar(_wifiTop, 4, n);
   _oled->flush();
 }
 
@@ -841,8 +930,7 @@ void MenuUi::drawTasks() {
     }
     _oled->textEN(2, y, buf, &Font8);
   }
-  if (_taskTop > 0) _oled->textEN(120, 18, "^", &Font8);
-  if (_taskTop + 6 < rows) _oled->textEN(120, 58, "v", &Font8);
+  drawScrollbar(_taskTop, 6, rows);
   _oled->flush();
 }
 
@@ -868,16 +956,15 @@ void MenuUi::drawDateTime() {
   lines[3] = "农历";
   lines[4] = l4;
   lines[5] = _wifi->connected() ? "NTP 已同步" : "NTP 未同步";
-  // 日期时间页不设选中行(sel=-1),只滚动
+  // 日期时间页不设选中行(sel=-1),只滚动;12px x4 行
   _oled->prepare();
   drawTitle("日期时间", "");
-  for (int i = 0; i < 3; i++) {
+  for (int i = 0; i < 4; i++) {
     int idx = _dtTop + i;
     if (idx >= 6) break;
-    _oled->textMixed(2, 16 + i * 16, lines[idx]);
+    _oled->textMixed12(3, 16 + i * 12, lines[idx]);
   }
-  if (_dtTop > 0) _oled->textEN(120, 18, "^", &Font8);
-  if (_dtTop + 3 < 6) _oled->textEN(120, 50, "v", &Font8);
+  drawScrollbar(_dtTop, 4, 6);
   _oled->flush();
 }
 
@@ -889,13 +976,12 @@ void MenuUi::drawAbout() {
   const char* lines[6] = {l0, "编译时间", l2, l3, "Si4703 FM", "ESP32-C3"};
   _oled->prepare();
   drawTitle("关于版本", "");
-  for (int i = 0; i < 3; i++) {
+  for (int i = 0; i < 4; i++) {
     int idx = _abTop + i;
     if (idx >= 6) break;
-    _oled->textMixed(2, 16 + i * 16, lines[idx]);
+    _oled->textMixed12(3, 16 + i * 12, lines[idx]);
   }
-  if (_abTop > 0) _oled->textEN(120, 18, "^", &Font8);
-  if (_abTop + 3 < 6) _oled->textEN(120, 50, "v", &Font8);
+  drawScrollbar(_abTop, 4, 6);
   _oled->flush();
 }
 
@@ -904,9 +990,9 @@ void MenuUi::drawScanning() {
   _oled->prepare();
   drawTitle("自动搜台", "");
   snprintf(buf, sizeof(buf), "已找到 %d 个台", _scanFound);
-  _oled->textMixed(2, 16, buf);
+  _oled->textMixed12(3, 18, buf);
   snprintf(buf, sizeof(buf), "当前 %.2fMHz", _scanFreq);
-  _oled->textMixed(2, 32, buf);
-  _oled->textMixed(2, 48, "按KEY1取消");
+  _oled->textMixed12(3, 34, buf);
+  _oled->textMixed12(3, 50, "按KEY1取消");
   _oled->flush();
 }

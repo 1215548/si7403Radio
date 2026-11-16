@@ -75,6 +75,85 @@ int CnFont_drawMixed(int x, int y, const char* utf8, bool invert) {
   return x;
 }
 
+// 16x16 字形降采样成 12x12:每个输出像素对应源图 2x2 区块,
+// 4 个源像素里至少 2 个点亮才输出。等比缩小时笔画会略粗,
+// 但 12px 下比直接丢行丢列更不容易断笔(宿主仿真里对比过)。
+void CnFont_draw12(int x, int y, uint16_t unicode, bool invert) {
+  const uint8_t* g = CnFont_findGlyph(unicode);
+  UWORD color = invert ? BLACK : WHITE;
+  if (!g) {
+    Paint_DrawRectangle((UWORD)x, (UWORD)y, (UWORD)(x + 11), (UWORD)(y + 11),
+                        color, DOT_PIXEL_1X1, DRAW_FILL_EMPTY);
+    return;
+  }
+  for (int oy = 0; oy < 12; oy++) {
+    int sy0 = oy * 16 / 12;
+    int sy1 = ((oy + 1) * 16 + 11) / 12;  // 向上取整,保证覆盖到尾
+    for (int ox = 0; ox < 12; ox++) {
+      int sx0 = ox * 16 / 12;
+      int sx1 = ((ox + 1) * 16 + 11) / 12;
+      int on = 0;
+      for (int sy = sy0; sy < sy1; sy++) {
+        for (int sx = sx0; sx < sx1; sx++) {
+          if (g[sy * 2 + sx / 8] & (0x80 >> (sx % 8))) on++;
+        }
+      }
+      if (on >= 2) Paint_SetPixel((UWORD)(x + ox), (UWORD)(y + oy), color);
+    }
+  }
+}
+
+int CnFont_drawMixed12(int x, int y, const char* utf8, bool invert) {
+  const char* p = utf8;
+  while (*p) {
+    uint16_t cp;
+    const char* next = utf8Next(p, cp);
+    if (cp < 0x80) {
+      char one[2] = {(char)cp, '\0'};
+      // Font8 高 8px,在 12px 行内垂直居中
+      Paint_DrawString_EN((UWORD)x, (UWORD)(y + 2), one, &Font8,
+                          invert ? BLACK : WHITE, invert ? WHITE : BLACK);
+      x += 5;
+    } else {
+      CnFont_draw12(x, y, cp, invert);
+      x += 12;
+    }
+    p = next;
+  }
+  return x;
+}
+
+int CnFont_mixedWidth12(const char* utf8) {
+  int w = 0;
+  const char* p = utf8;
+  while (*p) {
+    uint16_t cp;
+    p = utf8Next(p, cp);
+    w += (cp < 0x80) ? 5 : 12;
+  }
+  return w;
+}
+
+void CnFont_truncate12(const char* utf8, int maxWidth, char* out,
+                       size_t outSize) {
+  int w = 0;
+  size_t n = 0;
+  const char* p = utf8;
+  while (*p && n + 1 < outSize) {
+    uint16_t cp;
+    const char* next = utf8Next(p, cp);
+    int cw = (cp < 0x80) ? 5 : 12;
+    if (w + cw > maxWidth) break;
+    size_t len = (size_t)(next - p);
+    if (n + len >= outSize) break;
+    memcpy(out + n, p, len);
+    n += len;
+    w += cw;
+    p = next;
+  }
+  out[n] = '\0';
+}
+
 int CnFont_mixedWidth(const char* utf8) {
   int w = 0;
   const char* p = utf8;

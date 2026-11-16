@@ -52,6 +52,10 @@ void OledDisplay::flush() {
   _lastHash = h;
   _hashValid = true;
   OLED_2IN42_Display(s_frame);
+  // 实机:从频谱局部刷新切到整屏页面时,全屏第一页(屏幕最底 8px)
+  // 偶发被吞,底部残留上一屏内容。全屏末尾再补发底部两页(物理页
+  // 1/0,倒序写,页 0 最后),保证切页时底部立即更新;只需 256 字节。
+  OLED_2IN42_RefreshPages(s_frame, 0, 1);
 }
 
 void OledDisplay::clearRegion(int x0, int y0, int x1, int y1) {
@@ -90,6 +94,14 @@ void OledDisplay::textMixed(int x, int y, const char* utf8, bool invert) {
 
 int OledDisplay::mixedWidth(const char* utf8) {
   return CnFont_mixedWidth(utf8);
+}
+
+void OledDisplay::textMixed12(int x, int y, const char* utf8, bool invert) {
+  CnFont_drawMixed12(x, y, utf8, invert);
+}
+
+int OledDisplay::mixedWidth12(const char* utf8) {
+  return CnFont_mixedWidth12(utf8);
 }
 
 void OledDisplay::textEN12(int x, int y, const char* s, bool invert) {

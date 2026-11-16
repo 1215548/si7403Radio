@@ -10,6 +10,7 @@
 
 static WebServer s_server(80);
 static Preferences s_nvs;
+static bool s_routesReady = false;  // 路由只注册一次,反复开关不重复挂
 
 static const char* kWeekDays[] = {"星期日", "星期一", "星期二", "星期三",
                                   "星期四", "星期五", "星期六"};
@@ -22,6 +23,10 @@ void WifiPortal::begin() {
   String ssid = s_nvs.getString("ssid", "");
   String pass = s_nvs.getString("pass", "");
   WiFi.mode(WIFI_STA);
+  // ESP32-C3 Supermini 的射频前端在高功率下会饱和:softAP 返回成功、
+  // IP 也正常,但手机扫不到热点;STA 也可能连不上。降到 8.5dBm 后
+  // 正常(arduino-esp32 issue #6551 多例 C3 Supermini 同款)。
+  WiFi.setTxPower(WIFI_POWER_8_5dBm);
   if (ssid.length() > 0) {
     _ssidCache = ssid;
     WiFi.begin(ssid.c_str(), pass.c_str());  // 非阻塞,成败在 tick 里看
@@ -59,11 +64,6 @@ const char* WifiPortal::weekDayName() const {
 String WifiPortal::lunarFull() const { return _lunarFull; }
 String WifiPortal::lunarShort() const { return _lunarShort; }
 String WifiPortal::lunarMonthDay() const { return _lunarShort; }
-
-String WifiPortal::scanSSID(int i) const {
-  if (i < 0 || i >= _scanCount) return "";
-  return _scanSSIDs[i];
-}
 
 void WifiPortal::onConnected() {
   Serial.printf("[WIFI] connected %s %s RSSI %d\n", WiFi.SSID().c_str(),
@@ -129,20 +129,33 @@ static String htmlEscape(const String& s) {
 void WifiPortal::setPortal(bool on) {
   if (on == _portalOn) return;
   if (on) {
-    // 开 AP + 扫网 + 起 WebServer
+    // 只起 AP,不再做阻塞式 scanNetworks:扫描会占用射频、打断刚起
+    // 的 AP,实机表现为界面 AP ON 但手机搜不到热点。SSID 由用户在
+    // 网页里手输(输入框会带出上次保存的值)。
     WiFi.mode(WIFI_AP_STA);
-    WiFi.softAP(AP_SSID, "");
-    _scanCount = 0;
-    int n = WiFi.scanNetworks(false);
-    for (int i = 0; i < n && _scanCount < 16; i++) {
-      String s = WiFi.SSID(i);
-      if (s.length() == 0) continue;
-      bool dup = false;
-      for (int j = 0; j < _scanCount; j++)
-        if (_scanSSIDs[j] == s) dup = true;
-      if (!dup) _scanSSIDs[_scanCount++] = s;
+    // 见 begin():C3 Supermini 必须降低发射功率,否则 AP 不可见
+    WiFi.setTxPower(WIFI_POWER_8_5dBm);
+    bool apOk = WiFi.softAP(AP_SSID, "");
+    WiFi.setTxPower(WIFI_POWER_8_5dBm);  // softAP 后再设一次,防被复位
+    Serial.printf("[PORTAL] softAP=%d ssid=%s ip=%s ch=%d tx=%d\n",
+                  (int)apOk, AP_SSID, WiFi.softAPIP().toString().c_str(),
+                  WiFi.channel(), (int)WiFi.getTxPower());
+    if (!apOk || (uint32_t)WiFi.softAPIP() == 0) {
+      Serial.println("[PORTAL] AP failed, retry after mode reset");
+      WiFi.mode(WIFI_AP_STA);
+      delay(200);
+      apOk = WiFi.softAP(AP_SSID, "");
+      Serial.printf("[PORTAL] retry softAP=%d ip=%s\n", (int)apOk,
+                    WiFi.softAPIP().toString().c_str());
+    }
+    if (!apOk || (uint32_t)WiFi.softAPIP() == 0) {
+      // 不要假装成功:UI 继续显示 AP OFF,串口给出原因
+      Serial.println("[PORTAL] AP start failed");
+      WiFi.mode(WIFI_STA);
+      return;
     }
     s_nvs.begin("wifi", false);
+    if (!s_routesReady) {
     s_server.on("/", [this]() {
       // SSID/API Key 每次打开页面时从 NVS 现读(保存后立即生效)
       String savedSsid = s_nvs.getString("ssid", "");
@@ -155,16 +168,15 @@ void WifiPortal::setPortal(bool on) {
                                WiFi.localIP().toString()
                          : "未连接";
       h += "</p><form action='/save' method='POST'>"
-           "SSID: <input name='ssid' list='nets' value='" +
-           htmlEscape(savedSsid) + "'><datalist id='nets'>";
-      for (int i = 0; i < _scanCount; i++)
-        h += "<option value='" + htmlEscape(_scanSSIDs[i]) + "'>";
-      h += "</datalist><br>密码: <input type='password' name='pass'><br>"
+           "WiFi 名称: <input name='ssid' placeholder='输入路由器 WiFi 名称' value='" +
+           htmlEscape(savedSsid) +
+           "'><br>密码: <input type='password' name='pass'><br>"
            "API Key(预留): <input name='apikey' value='" +
            htmlEscape(savedKey) +
            "'><br><input type='submit' value='保存并连接'></form>"
-           "<p>保存后设备自动连接,约 10 秒后刷新本页查看状态。"
-           "API Key 仅保存,暂无功能。</p></body></html>";
+           "<p>手机保持连接 Si4703Radio 热点,保存后设备自动连接路由器,"
+           "约 10 秒后刷新本页查看状态。API Key 仅保存,暂无功能。</p>"
+           "</body></html>";
       s_server.send(200, "text/html; charset=utf-8", h);
     });
     s_server.on("/save", [this]() {
@@ -178,6 +190,7 @@ void WifiPortal::setPortal(bool on) {
       _ssidCache = ssid;
       _staConnected = false;
       _timeOk = false;
+      WiFi.setTxPower(WIFI_POWER_8_5dBm);  // C3 Supermini 高功率会连不上
       WiFi.begin(ssid.c_str(), pass.c_str());
       Serial.printf("[WIFI] portal saved %s, reconnecting...\n",
                     ssid.c_str());
@@ -190,13 +203,17 @@ void WifiPortal::setPortal(bool on) {
     });
     s_server.onNotFound(
         []() { s_server.send(404, "text/plain", "404 Not Found"); });
+      s_routesReady = true;
+    }
     s_server.begin();
     _portalOn = true;
-    Serial.println("[PORTAL] on 192.168.4.1");
+    Serial.printf("[PORTAL] on 192.168.4.1 mode=%d stations=%d\n",
+                  (int)WiFi.getMode(), (int)WiFi.softAPgetStationNum());
   } else {
     s_server.stop();
     WiFi.softAPdisconnect(true);
     WiFi.mode(WIFI_STA);  // 保持 STA(若已连接则不断)
+    WiFi.setTxPower(WIFI_POWER_8_5dBm);
     _portalOn = false;
     Serial.println("[PORTAL] off");
   }
