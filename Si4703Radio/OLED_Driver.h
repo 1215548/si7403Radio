@@ -48,8 +48,12 @@ void OLED_2IN42_Init(void);
 void OLED_2IN42_Clear(void);
 void OLED_2IN42_Display(const UBYTE *Image);
 void OLED_2IN42_Display_Array(const UBYTE *Image);
-// (局部刷新 OLED_2IN42_RefreshPages 已删:四个版本在实机上均不生效;
-//  频谱柱子 v0.3.9 已删,另一位 AI 接手,见 menu.cpp drawHomePlaying)
+// 局部刷新:只重发 page0..page1 两个物理页(每页 128 字节)。
+// 注意 page 是 GDDRAM 物理页号,不是逻辑画布的页号——本工程画布
+// 旋转 270°,逻辑页 lp 的数据在物理页 7-lp,所以底部逻辑页 6/7
+// 对应物理页 1/0。调用方请走 OledDisplay::refreshRows(),
+// 按逻辑行号传参,不要直接猜页号(历史 bug 就出在这里)。
+void OLED_2IN42_RefreshPages(const UBYTE *Image, UBYTE page0, UBYTE page1);
 
 #endif  
 	 

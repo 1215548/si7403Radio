@@ -26,12 +26,17 @@ public:
   void textEN12(int x, int y, const char* s, bool invert = false);
   void hline(int x0, int x1, int y);
   void fillRect(int x0, int y0, int x1, int y1, bool white);
-  void rect(int x0, int y0, int x1, int y1);
+  void rect(int x0, int y0, int x1, int y1, bool white = true);
+  void pixel(int x, int y, bool white = true);
+  void line(int x0, int y0, int x1, int y1, bool white = true);
+  void circle(int cx, int cy, int r, bool fill, bool white = true);
   // 信号条:外框 + 按 pct(0-100)填充
   void bar(int x, int y, int w, int h, int pct);
   // 只清显存里一个矩形区域(不刷新);频谱动画逐帧重画底部用
   void clearRegion(int x0, int y0, int x1, int y1);
-  // (局部刷新 refreshPages 已删:见 OLED_Driver.h 注释)
+  // 局部刷新逻辑行区间 [y0,y1](0..63):只把覆盖到的页发到屏上,
+  // 不碰其他页。内部会把逻辑页换算成旋转 270° 后的物理页。
+  void refreshRows(int y0, int y1);
 
   // 通用两行消息(启动画面、搜台中、按键反馈等)
   void showMessage(const char* line1, const char* line2);

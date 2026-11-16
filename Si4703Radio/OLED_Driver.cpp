@@ -100,15 +100,13 @@ static void OLED_InitReg(void)
     OLED_WriteReg(0x00);//---set low column address
     OLED_WriteReg(0x10);//---set high column address
 
-    // 寻址模式:0x02=页寻址(不要改回 0x00 横向寻址)。局部刷新依赖
-    // 0xB0 页地址命令随机写某一页;横向模式下 0xB0/0x00/0x10 命令
-    // 全部被忽略,数据按顺序流写到当前指针处——改了哪页就错写到哪页,
-    // 表现为同一行内容在多个纵向位置重复出现并每秒闪动(2026-11-16
-    // 实机照片:信号条在 4 个位置重复)。全屏流写在两种模式下都对,
-    // 所以旧版全屏刷新看不出问题,局部刷新一上就暴露。
-    // **v0.3.7 的教训:参数改走 OLED_WriteData(DC=1)后实机只剩
-    // FM+柱子、顶部全黑,比 DC=0 更糟——已回退到 DC=0(与 v0.3.6
-    // 相同)。局部刷新在这块屏上始终不生效,频谱改走全屏重画。**
+    // 寻址模式:0x02=页寻址。SSD1309 手册表 9-3 明确:命令和它的
+    // 参数都用 D/C#=0 送,只有写 GDDRAM 才用 D/C#=1。所以下面
+    // 0x20/0x02 都走 OLED_WriteReg 是正确的(v0.3.7 曾把参数改成
+    // DC=1,反而破坏初始化,已回退)。
+    // 局部刷新失效的真正原因不是寻址模式,而是页序:画布旋转 270°,
+    // 显存里逻辑页 lp 对应 GDDRAM 物理页 7-lp。旧代码刷物理页 6/7,
+    // 刷的其实是顶部逻辑页 1/0,底部柱子当然一直不动。
     OLED_WriteReg(0x20);
     OLED_WriteReg(0x02);
 
@@ -179,25 +177,51 @@ void OLED_2IN42_Clear()
 }
 
 /********************************************************************************
+function:	Set page + column start address (page addressing mode)
+********************************************************************************/
+static void OLED_SetPageAddress(UWORD page)
+{
+    OLED_WriteReg(0xB0 + page);
+    OLED_WriteReg(0x00);
+    OLED_WriteReg(0x10);
+}
+
+/********************************************************************************
 function:	Update memory to OLED
-note: 逐页突发写:寻址/顺序与原版逐字节完全一致(先定页+列地址再发
-  128 字节),只是每页一次事务而不是 128 次——全屏约 1ms。
-  这样写在页寻址和横向寻址两种模式下都对(横向模式下 0xB0 命令
-  被忽略、数据按顺序流写,正好与发送顺序一致),不依赖寻址模式。
-  局部刷新(只发变化的页)曾因横向模式下 0xB0 被忽略而错页,已删掉。
+note: 逐页突发写:先定页+列地址再发 128 字节,每页一次事务而不是
+  128 次——全屏约 1ms。
+  显存是旋转 270° 后的布局:物理页 page 的数据在 Image[(7-page)
+  + column*8],与 GUI_Paint 的 270° 寻址一致。局部刷新必须沿用
+  同一个换算,否则页号会刷错地方。
 ********************************************************************************/
 void OLED_2IN42_Display(const UBYTE *Image)
 {
     UBYTE pageBuf[128];
     for (UWORD page=0; page<8; page++) {
-        /* set page address */
-        OLED_WriteReg(0xB0 + page);
-        /* set low column address */
-        OLED_WriteReg(0x00);
-        /* set high column address */
-        OLED_WriteReg(0x10);
+        OLED_SetPageAddress(page);
 
         /* gather page data then burst it in one transaction */
+        for (UWORD column=0; column<128; column++) {
+            pageBuf[column] = Image[(7-page) + column*8];
+        }
+        OLED_WriteData_Buffer(pageBuf, sizeof(pageBuf));
+    }
+}
+
+/********************************************************************************
+function:	Refresh selected GDDRAM pages only
+note: page0..page1 是物理页号。先显式设页寻址(datasheet 表 9-3:
+  命令参数均 DC=0),再逐页定页+列地址后突发写,与全屏逐页写法
+  完全一致。底部逻辑页 6/7 => 物理页 1/0,见 OledDisplay::refreshRows。
+********************************************************************************/
+void OLED_2IN42_RefreshPages(const UBYTE *Image, UBYTE page0, UBYTE page1)
+{
+    UBYTE pageBuf[128];
+    if (page0 > page1 || page1 > 7) return;
+    OLED_WriteReg(0x20);
+    OLED_WriteReg(0x02);
+    for (UWORD page=page0; page<=page1; page++) {
+        OLED_SetPageAddress(page);
         for (UWORD column=0; column<128; column++) {
             pageBuf[column] = Image[(7-page) + column*8];
         }

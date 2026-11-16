@@ -81,9 +81,14 @@ private:
   void drawAbout();
   void drawScanning();
   void drawTitle(const char* zh, const char* rightEn);
-  // 列表菜单:标题 + 3 行可见(16px),sel 选中行反白;返回是否需要滚动
+  // 列表菜单:标题 + 3 行可见(16px),sel 选中行反白
   void drawList(const char* title, const char* items[], int count, int sel,
                 int top, const char* rightEn);
+  // 右侧滚动条(x=126..127),top/visible/count 见 drawList
+  void drawScrollbar(int top, int visible, int count);
+  // 首页播放时底部频谱:y=52..63,16 根柱子
+  void drawSpectrum();
+  void tickSpectrum();  // 20fps 推进柱高并局部刷新底部两页
   bool playing() const;  // 收音机正在播放(OK 且未静音)
   void setDirty() { _dirty = true; }
 
@@ -119,6 +124,11 @@ private:
   // 每秒重发一次全屏——这就是 1 秒一闪。迟滞后只有信号真正变化
   // (>=3)才更新显示,静止时零 SPI 流量。
   int _dispRssi = -1;
+  // 底部频谱(伪频谱:Si4703 不出音频电平,纯装饰律动)
+  static const int kSpecBars = 16;
+  uint8_t _specLevel[kSpecBars] = {0};
+  uint8_t _specPeak[kSpecBars] = {0};
+  uint32_t _lastSpecMs = 0;
   // 任务快照
   struct TaskRow {
     char name[17];

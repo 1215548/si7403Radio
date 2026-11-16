@@ -59,6 +59,25 @@ void OledDisplay::clearRegion(int x0, int y0, int x1, int y1) {
                       DOT_PIXEL_1X1, DRAW_FILL_FULL);
 }
 
+void OledDisplay::refreshRows(int y0, int y1) {
+  if (y0 > y1) {
+    int t = y0;
+    y0 = y1;
+    y1 = t;
+  }
+  if (y0 < 0) y0 = 0;
+  if (y1 > 63) y1 = 63;
+  int lp0 = y0 / 8;
+  int lp1 = y1 / 8;
+  // 显存逻辑页 lp 在 GDDRAM 物理页 7-lp(见 OLED_2IN42_Display 的
+  // (7-page) 下标)。区间要反过来映射:lp0..lp1 -> (7-lp1)..(7-lp0)。
+  OLED_2IN42_RefreshPages(s_frame, 7 - lp1, 7 - lp0);
+  // 局部刷新后屏上内容与显存一致,同步哈希,避免下一次 flush 误判后
+  // 把整屏又重发一遍。
+  _lastHash = frameHash();
+  _hashValid = true;
+}
+
 void OledDisplay::textEN(int x, int y, const char* s, sFONT* font,
                          bool invert) {
   Paint_DrawString_EN((UWORD)x, (UWORD)y, s, font, invert ? BLACK : WHITE,
@@ -88,9 +107,24 @@ void OledDisplay::fillRect(int x0, int y0, int x1, int y1, bool white) {
                       white ? WHITE : BLACK, DOT_PIXEL_1X1, DRAW_FILL_FULL);
 }
 
-void OledDisplay::rect(int x0, int y0, int x1, int y1) {
-  Paint_DrawRectangle((UWORD)x0, (UWORD)y0, (UWORD)x1, (UWORD)y1, WHITE,
-                      DOT_PIXEL_1X1, DRAW_FILL_EMPTY);
+void OledDisplay::rect(int x0, int y0, int x1, int y1, bool white) {
+  Paint_DrawRectangle((UWORD)x0, (UWORD)y0, (UWORD)x1, (UWORD)y1,
+                      white ? WHITE : BLACK, DOT_PIXEL_1X1, DRAW_FILL_EMPTY);
+}
+
+void OledDisplay::pixel(int x, int y, bool white) {
+  Paint_DrawPoint((UWORD)x, (UWORD)y, white ? WHITE : BLACK, DOT_PIXEL_1X1,
+                  DOT_STYLE_DFT);
+}
+
+void OledDisplay::line(int x0, int y0, int x1, int y1, bool white) {
+  Paint_DrawLine((UWORD)x0, (UWORD)y0, (UWORD)x1, (UWORD)y1,
+                 white ? WHITE : BLACK, DOT_PIXEL_1X1, LINE_STYLE_SOLID);
+}
+
+void OledDisplay::circle(int cx, int cy, int r, bool fill, bool white) {
+  Paint_DrawCircle((UWORD)cx, (UWORD)cy, (UWORD)r, white ? WHITE : BLACK,
+                   DOT_PIXEL_1X1, fill ? DRAW_FILL_FULL : DRAW_FILL_EMPTY);
 }
 
 void OledDisplay::bar(int x, int y, int w, int h, int pct) {
