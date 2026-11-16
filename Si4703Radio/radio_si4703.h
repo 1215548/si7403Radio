@@ -12,6 +12,7 @@
 #pragma once
 #include <Arduino.h>
 #include "pins.h"
+#include "rds_parser.h"
 
 // 寄存器地址(手册 §5)
 #define SI4703_REG_DEVICEID   0x00
@@ -24,9 +25,14 @@
 #define SI4703_REG_TEST1      0x07
 #define SI4703_REG_STATUSRSSI 0x0A
 #define SI4703_REG_READCHAN   0x0B
+#define SI4703_REG_RDSA       0x0C
+#define SI4703_REG_RDSB       0x0D
+#define SI4703_REG_RDSC       0x0E
+#define SI4703_REG_RDSD       0x0F
 
 // POWERCFG(02h) 各位
 #define SI4703_PWR_DMUTE  0x4000  // 1=取消静音
+#define SI4703_PWR_RDSM   0x0800  // 1=RDS 详细模式(手册 §4.4)
 #define SI4703_PWR_SEEKUP 0x0200
 #define SI4703_PWR_SEEK   0x0100
 #define SI4703_PWR_DISABLE 0x0040
@@ -34,12 +40,20 @@
 // CHANNEL(03h)
 #define SI4703_CH_TUNE 0x8000
 // SYSCONFIG1(04h)
+#define SI4703_CFG1_RDS 0x1000    // 1=开 RDS
 #define SI4703_CFG1_DE 0x0800     // 1=50us(中国),0=75us
 // STATUSRSSI(0Ah)
+#define SI4703_RDSR  0x8000       // 1=新 RDS 组就绪
 #define SI4703_STC   0x4000
 #define SI4703_SFBL  0x2000
 #define SI4703_AFCRL 0x1000
+#define SI4703_RDSS  0x0800       // 1=RDS 已同步(仅详细模式)
+#define SI4703_BLERA_MASK 0x0600 // Block A 误码等级(仅详细模式)
 #define SI4703_ST    0x0100       // 1=立体声
+// READCHAN(0Bh)高 6 位是 B/C/D 块误码等级(仅详细模式)
+#define SI4703_BLERB_MASK 0xC000
+#define SI4703_BLERC_MASK 0x3000
+#define SI4703_BLERD_MASK 0x0C00
 // TEST1(07h)
 #define SI4703_TEST1_XOSCEN 0x8000
 #define SI4703_TEST1_POWERDOWN 0x0100  // 上电前 bits13:0 保持值
@@ -47,9 +61,10 @@
 
 // 期望的 ID(手册 §6):C19 版 Si4703 上电前 CHIPID=0x1200,上电后=0x1253;
 // DEVICEID 低 12 位 MFGID=0x242。
-// 但市售“Si4703”模块的芯片未必是 C19 版 Si4703:实测某模块上电前
-// CHIPID=0x0800(DEV=0,即 Si4702,REV=2),调频功能与 Si4703 相同,
-// 只是没有 RDS。因此这里不卡死 0x1200/0x1253,只认 MFGID 和
+// 但市售“Si4703”模块的芯片未必是 C19 版:2026-11-16 实测某模块
+// 上电前 CHIPID=0x0800(DEV=0),上电后却报 0x0A50(DEV=9、FW=0x10),
+// 即老固件的 Si4703——上电前 CHIPID 不能用来定型号,须看上电后
+// 的 DEV 位段。因此这里不卡死 0x1200/0x1253,只认 MFGID 和
 // DEV/FIRMWARE 位段,见 radio_si4703.cpp 的 begin()。
 #define SI4703_CHIPID_BEFORE_POWERUP 0x1200
 #define SI4703_CHIPID_AFTER_POWERUP  0x1253
@@ -73,6 +88,12 @@ public:
   bool setMute(bool mute);
   bool readStatus();              // 刷新 rssi/stereo/实际频率
   bool readAllRegs(uint16_t regs[16]); // 诊断:读 00h~0Fh
+
+  // RDS:主循环每 50ms 调一次,有新 RDS 内容(台名/文本/时间/同步)
+  // 返回 true;Si4702 无 RDS,直接返回 false。见 rds_parser.h。
+  bool pollRds();
+  void resetRds() { _rds.reset(); }
+  const RdsInfo& rds() const { return _rds.info(); }
 
   float freqMHz() const { return _freqMHz; }
   int rssi() const { return _rssi; }          // dBuV,0~75
@@ -102,7 +123,8 @@ private:
   }
 
   bool _ok = false;
-  bool _isSi4703 = true;  // 由 CHIPID 的 DEV 位段判定,见 begin()
+  bool _isSi4703 = true;  // 由上电后 CHIPID 的 DEV 位段判定,见 begin()
+  RdsParser _rds;         // RDS 组解析,见 rds_parser.h
   char _error[64] = "";
   uint16_t _deviceId = 0;
   uint16_t _chipId = 0;

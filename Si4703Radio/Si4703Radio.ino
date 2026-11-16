@@ -35,14 +35,33 @@ static bool g_muted = false;
 static char g_msg[32] = "";
 static bool g_uiDirty = true;
 static uint32_t g_lastStatusMs = 0;
+static uint32_t g_lastRdsMs = 0;
+static uint32_t g_lastRtScrollMs = 0;  // RT 滚动帧计时
+
+static void printRds() {
+  const RdsInfo& r = g_radio.rds();
+  if (!r.synced) {
+    Serial.println(F("RDS no sync"));
+    return;
+  }
+  Serial.printf("RDS PI=0x%04X PTY=%s TP=%d TA=%d groups=%lu bad=%lu\n", r.pi,
+                RdsParser::ptyName(r.pty), (int)r.tp, (int)r.ta,
+                (unsigned long)r.groups, (unsigned long)r.badGroups);
+  if (r.psComplete) Serial.printf("  PS=\"%s\"\n", r.ps);
+  if (r.rtLen) Serial.printf("  RT=\"%s\"\n", r.rt);
+  if (r.hasCt)
+    Serial.printf("  CT=%04d-%02d-%02d %02d:%02d\n", r.ctYear, r.ctMonth,
+                  r.ctDay, r.ctHour, r.ctMinute);
+}
 
 static void printHelp() {
   Serial.println(F("---- serial commands (115200) ----"));
   Serial.println(F("f 98.5  tune   s seek up   S seek down"));
   Serial.println(F("v 12    volume 0-15   m mute toggle"));
-  Serial.println(F("i       dump regs 00h-0Fh   t OLED test pattern"));
+  Serial.println(F("i       dump regs 00h-0Fh + RDS   t OLED test pattern"));
   Serial.println(F("r       re-init radio   ? this help"));
   Serial.println(F("keys: K1 VOL- K2 VOL+ K3 F- K4 F+ K5 SEEK"));
+  Serial.println(F("RDS auto: PS/RT/CT on screen + serial when station sends RDS"));
 }
 
 static void refreshUi() {
@@ -53,7 +72,8 @@ static void refreshUi() {
   }
   g_oled.showRadio(g_freqMHz, g_radioOk ? g_radio.rssi() : 0,
                    g_radioOk ? g_radio.isStereo() : false, g_volume, g_muted,
-                   g_radioOk, g_msg);
+                   g_radioOk, g_msg,
+                   g_radioOk ? &g_radio.rds() : nullptr, millis());
 }
 
 static void setMsg(const char* fmt, float v) {
@@ -229,6 +249,7 @@ static void handleSerial() {
     Serial.printf("freq=%.2fMHz RSSI=%d ST=%d VOL=%d MUTE=%d\n", g_freqMHz,
                   g_radio.rssi(), (int)g_radio.isStereo(), g_volume,
                   (int)g_muted);
+    printRds();
     g_uiDirty = true;
   } else if (cmd == 't') {
     g_oled.showTestPattern();
@@ -269,6 +290,21 @@ void loop() {
       g_led.set(g_radio.isStereo() && !g_radio.isMuted());
       g_uiDirty = true;
     }
+  }
+  // 每 50ms 收一次 RDS 组(见 radio_si4703.cpp pollRds 注释);
+  // 有新内容就串口打印并刷新屏幕
+  if (g_radioOk && (uint32_t)(millis() - g_lastRdsMs) >= 50) {
+    g_lastRdsMs = millis();
+    if (g_radio.pollRds()) {
+      printRds();
+      g_uiDirty = true;
+    }
+  }
+  // RadioText 超长时滚动:每 600ms 刷一帧
+  if (g_radioOk && g_radio.rds().rtLen > 21 &&
+      (uint32_t)(millis() - g_lastRtScrollMs) >= 600) {
+    g_lastRtScrollMs = millis();
+    g_uiDirty = true;
   }
   if (g_uiDirty) {
     refreshUi();

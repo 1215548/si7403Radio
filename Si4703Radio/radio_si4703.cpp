@@ -99,6 +99,7 @@ bool Si4703Radio::writeRegister(uint8_t reg, uint16_t value) {
 bool Si4703Radio::begin() {
   _ok = false;
   _error[0] = '\0';
+  _rds.reset();  // 旧台的 RDS 内容作废
 
   pinMode(PIN_SI4703_RST, OUTPUT);
   pinMode(PIN_SI4703_SEN, OUTPUT);
@@ -133,9 +134,9 @@ bool Si4703Radio::begin() {
   }
   // 上电前 CHIPID 只做“像不像 Si470x”的判断,不卡死 0x1200:
   // DEV 位段(9:6)bit3 置位=Si4703(8/9),清零=Si4702(0/1)。
-  // 实测有模块报 0x0800(DEV=0,Si4702),旧代码在此直接 return,
-  // 导致下面的 TEST1/配置/上电写操作一行都没执行——这就是
-  // `i` 打印里 02h~06h 全 0、07h 仍是复位值 0x0100 的原因。
+  // 注意上电前的值不可靠:实测某模块上电前报 0x0800(DEV=0),
+  // 上电后却是 0x0A50(DEV=9、FW=0x10),即老固件 Si4703,
+  // 型号最终以上电后的 DEV 为准,见下面的二次判定。
   _isSi4703 = (_chipId & 0x0200) != 0;
 
   // 晶振:须在 ENABLE=1 之前使能(手册 §4.7/寄存器 07h)。
@@ -147,8 +148,9 @@ bool Si4703Radio::begin() {
   writeRegister(SI4703_REG_TEST1, SI4703_TEST1_POWERDOWN);
 #endif
 
-  // SYSCONFIG1:去加重 50us(中国),RDS 关,GPIO 高阻
-  _shadow[SI4703_REG_SYSCONFIG1 - 0x02] = SI4703_CFG1_DE;
+  // SYSCONFIG1:去加重 50us(中国),开 RDS,GPIO 高阻
+  _shadow[SI4703_REG_SYSCONFIG1 - 0x02] =
+      (uint16_t)(SI4703_CFG1_DE | SI4703_CFG1_RDS);
   writeRegister(SI4703_REG_SYSCONFIG1, _shadow[SI4703_REG_SYSCONFIG1 - 0x02]);
   // SYSCONFIG2:SEEKTH + 波段 87.5~108 + 步进 100kHz + 音量
   _volume = RADIO_DEFAULT_VOLUME;
@@ -159,9 +161,12 @@ bool Si4703Radio::begin() {
   _shadow[SI4703_REG_SYSCONFIG3 - 0x02] = 0x0000;
   writeRegister(SI4703_REG_SYSCONFIG3, 0x0000);
 
-  // 上电:ENABLE=1 + DMUTE=1(取消静音)。上电时间最长 110ms(手册表 8)。
+  // 上电:ENABLE=1 + DMUTE=1(取消静音)+ RDSM=1(RDS 详细模式,
+  // 手册 §4.4:才有 RDSS 同步标志和各块 BLER 误码等级)。
+  // 上电时间最长 110ms(手册表 8)。
   _muted = false;
-  _shadow[SI4703_REG_POWERCFG - 0x02] = SI4703_PWR_DMUTE | SI4703_PWR_ENABLE;
+  _shadow[SI4703_REG_POWERCFG - 0x02] =
+      (uint16_t)(SI4703_PWR_DMUTE | SI4703_PWR_ENABLE | SI4703_PWR_RDSM);
   writeRegister(SI4703_REG_POWERCFG, _shadow[SI4703_REG_POWERCFG - 0x02]);
   delay(110);
 
@@ -213,6 +218,7 @@ bool Si4703Radio::tune(float freqMHz) {
   _shadow[SI4703_REG_CHANNEL - 0x02] = chan;
   writeRegister(SI4703_REG_CHANNEL, chan);
   readStatus();
+  if (done) _rds.reset();  // 换了台,旧台的 RDS 内容作废
   return done;
 }
 
@@ -232,7 +238,9 @@ bool Si4703Radio::seek(bool up) {
   _shadow[SI4703_REG_POWERCFG - 0x02] = pwr;
   writeRegister(SI4703_REG_POWERCFG, pwr);
   readStatus();
-  return done && !_sfbl;
+  bool found = done && !_sfbl;
+  if (found) _rds.reset();  // 换了台,旧台的 RDS 内容作废
+  return found;
 }
 
 bool Si4703Radio::setVolume(uint8_t vol) {
@@ -269,4 +277,28 @@ bool Si4703Radio::readStatus() {
 bool Si4703Radio::readAllRegs(uint16_t regs[16]) {
   for (uint8_t i = 0; i < 16; i++) regs[i] = readRegister(i);
   return true;
+}
+
+// ---------- RDS ----------
+// 主循环每 50ms 调一次。RDS 组最快约 11 组/秒,RDSR 在详细模式
+// 下同步后每组置位 ≥40ms,50ms 轮询基本不漏组;PS/RT 是循环播发
+// 的,偶尔漏一组也会在 1~2 秒内补齐。
+// 注意:读 0Ch~0Fh 会清除 RDSR;万一某固件不清,重复喂同一组
+// 也是幂等的(同字符覆盖同位置),不会出错。
+bool Si4703Radio::pollRds() {
+  if (!_ok || !_isSi4703) return false;  // Si4702 无 RDS
+  uint16_t st = readRegister(SI4703_REG_STATUSRSSI);
+  bool synced = (st & SI4703_RDSS) != 0;
+  if (!(st & SI4703_RDSR)) {
+    return _rds.setSynced(synced);  // 无新组,只跟进同步状态
+  }
+  uint16_t rc = readRegister(SI4703_REG_READCHAN);
+  uint16_t a = readRegister(SI4703_REG_RDSA);
+  uint16_t b = readRegister(SI4703_REG_RDSB);
+  uint16_t c = readRegister(SI4703_REG_RDSC);
+  uint16_t d = readRegister(SI4703_REG_RDSD);
+  return _rds.feed(a, b, c, d, (uint8_t)((st & SI4703_BLERA_MASK) >> 9),
+                   (uint8_t)((rc & SI4703_BLERB_MASK) >> 14),
+                   (uint8_t)((rc & SI4703_BLERC_MASK) >> 12),
+                   (uint8_t)((rc & SI4703_BLERD_MASK) >> 10), synced);
 }

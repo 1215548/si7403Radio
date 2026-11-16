@@ -124,6 +124,15 @@ KEY5 向上搜台。静音走串口。
   上电/复位时不要按住按键；RST 由程序控制，复位后即拉高。
 - **KEY3/KEY4 在 IO20/IO21**，那是 UART0 的 RX/TX；本工程串口
   走 USB CDC，不占 UART0，所以可以做按键。不要再启用 Serial0。
-- **RDS 暂未接。**Si4703 的 RDS 默认关闭（SYSCONFIG1 RDS=0）；
-  下一步可置 RDS=1 并读 RDSA–RDSD（0Ch–0Fh），寄存器读写接口
-  已留好（`readRegister`/`readAllRegs`，串口 `i` 可直接看）。
+- **RDS 已接（2026-11-16，`rds_parser` 模块）。**SYSCONFIG1
+  RDS=1 且 POWERCFG RDSM=1（详细模式，才有 RDSS 同步标志和各块
+  BLER 误码等级）；主循环每 50ms 收组，BLER>1 的块丢弃。
+  屏幕显示：PS 台名 + 节目类型（第 2 行）、RadioText 滚动
+  （第 3 行，超 21 字符时每 600ms 滚一格）、CT 时间（无文本时
+  显示在第 3 行）；串口在内容变化时打印 `RDS PI=… PS="…" RT="…" CT=…`。
+  换台/搜台成功后旧台内容自动清空，PI 变了也一样。
+  限制：RDS 要信号够好才能同步（RSSI 十几的弱台收不到）；
+  国内多数 FM 台不发 RDS，莆田本地台大概率没有——屏幕长期
+  显示 RSSI 行、串口报 `RDS no sync` 就是台端没发，不是代码问题；
+  RDS 字符集是拉丁文，中文台名发不出来，个别台用 GB 编码塞
+  RadioText 会显示乱码。Si4702 没有 RDS，`pollRds()` 直接跳过。
