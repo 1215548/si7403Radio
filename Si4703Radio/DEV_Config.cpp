@@ -59,6 +59,13 @@ void SPI4W_Write_Byte(uint8_t DATA)
   SPI.endTransaction();
 }
 
+void SPI4W_Write_Buffer(const uint8_t* data, size_t len) {
+  if (len == 0) return;
+  SPI.beginTransaction(SPISettings(OLED_SPI_CLOCK_HZ, MSBFIRST, SPI_MODE3));
+  SPI.writeBytes(data, len);
+  SPI.endTransaction();
+}
+
 void I2C_Write_Byte(uint8_t value, uint8_t Cmd)
 {
   uint8_t Addr = 0x3c;

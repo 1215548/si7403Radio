@@ -34,4 +34,8 @@ public:
   void showMessage(const char* line1, const char* line2);
   // 阶段一自检图:几何图形 + 字符,确认屏/字库/旋转都正常
   void showTestPattern();
+
+private:
+  uint32_t _lastHash = 0;  // 上次发出帧的 FNV-1a 哈希(防频闪,见 .cpp flush)
+  bool _hashValid = false;
 };

@@ -55,6 +55,10 @@
 uint8_t System_Init(void);
 
 void SPI4W_Write_Byte(uint8_t DATA);
+// 整块突发写:一次事务发完整个 buffer(DC/CS 由调用方保持)。
+// 比逐字节开事务快一个量级;单线程、收音机只在两次 OLED 调用之间
+// 借走总线,所以一页 128 字节内连续发是安全的。
+void SPI4W_Write_Buffer(const uint8_t* data, size_t len);
 void I2C_Write_Byte(uint8_t value, uint8_t Cmd);
 
 void Driver_Delay_ms(unsigned long xms);

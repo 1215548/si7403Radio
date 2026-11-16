@@ -34,7 +34,20 @@ void OledDisplay::clear() {
 
 void OledDisplay::prepare() { Paint_Clear(BLACK); }
 
-void OledDisplay::flush() { OLED_2IN42_Display(s_frame); }
+void OledDisplay::flush() {
+  // 防频闪第二层:帧内容与上次发出时完全相同就不调驱动——1 秒轮询/
+  // 600ms 滚动在无变化时零 SPI 流量,静止画面不闪。
+  // 变了则走局部刷新(只发变化的页,每页一次突发事务),见 OLED_Driver.cpp。
+  uint32_t h = 2166136261u;  // FNV-1a 32
+  for (size_t i = 0; i < sizeof(s_frame); i++) {
+    h ^= s_frame[i];
+    h *= 16777619u;
+  }
+  if (_hashValid && h == _lastHash) return;
+  _lastHash = h;
+  _hashValid = true;
+  OLED_2IN42_Display_Partial(s_frame);
+}
 
 void OledDisplay::textEN(int x, int y, const char* s, sFONT* font,
                          bool invert) {
